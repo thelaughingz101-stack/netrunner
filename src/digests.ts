@@ -10,11 +10,14 @@ export interface DigestRow {
   source: string;
   extra: Record<string, unknown> | null;
   createdAt: string;
+  /** The run's Catch-up range (12h, 24h…), when the digest came from a run. */
+  lookback: string | null;
 }
 
 const map = (r: any): DigestRow => ({
   id: r.id, runId: r.run_id, date: r.date, mode: r.mode, content: r.content,
   dryRun: !!r.dry_run, source: r.source, extra: r.extra_json ? JSON.parse(r.extra_json) : null, createdAt: r.created_at,
+  lookback: r.lookback ?? null,
 });
 
 export function saveDigest(d: { runId?: string | null; date: string; mode: string; content: string; dryRun?: boolean; source?: string; extra?: object }): number {
@@ -25,7 +28,7 @@ export function saveDigest(d: { runId?: string | null; date: string; mode: strin
 }
 
 export function listDigests(limit = 300): DigestRow[] {
-  return db().prepare('SELECT * FROM digests ORDER BY date DESC, id DESC LIMIT ?').all(limit).map(map);
+  return db().prepare('SELECT d.*, r.lookback FROM digests d LEFT JOIN runs r ON r.id = d.run_id ORDER BY d.date DESC, d.id DESC LIMIT ?').all(limit).map(map);
 }
 
 export function deleteDigest(id: number): boolean {

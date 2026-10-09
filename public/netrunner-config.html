@@ -1379,6 +1379,10 @@ function CustomSourcesTab({ config, update }) {
 
 // ── ROOT ──────────────────────────────────────────────────────────────────────
 
+// "Covers the last 24 hours" — the Catch-up range the run used. Not shown for recaps or imported files.
+const CATCH_UP_TEXT = { "12h":"last 12 hours", "24h":"last 24 hours", "3d":"last 3 days", "1w":"last week", "2w":"last 2 weeks", "1mo":"last month" };
+const catchUpLabel = (e) => (e.mode === "weekly" || e.mode === "monthly" || !CATCH_UP_TEXT[e.lookback]) ? "" : `covers the ${CATCH_UP_TEXT[e.lookback]}`;
+
 // Sections the Format/Topics toggles can hide. Saved digests always keep them; this only changes what's shown.
 const HIDEABLE = [
   { id:"everythingElse", re:/Everything Else/i, label:"everything else" },
@@ -1461,6 +1465,7 @@ function OutputTab({ entries, selectedId, onSelect, onRemove, onImport, showDefa
                   <div>
                     <div style={{ fontFamily:F.disp, fontSize:16, fontWeight:700, color:C.text, textTransform:"capitalize" }}>{selected.mode} — {selected.date}</div>
                     <div style={{ fontFamily:F.mono, fontSize:11, color:C.faint }}>saved {new Date(selected.savedAt).toLocaleString()}</div>
+                    {catchUpLabel(selected) && <div style={{ fontFamily:F.body, fontSize:12.5, color:C.orange, marginTop:2 }}>Catch-up range: {catchUpLabel(selected).replace(/^covers the /, "")}</div>}
                   </div>
                   <div style={{ marginLeft:"auto", display:"flex", gap:8, flexWrap:"wrap", justifyContent:"flex-end" }}>
                     {HIDEABLE.filter(h => view.counts[h.id] !== undefined).map(h => (
@@ -1510,7 +1515,7 @@ function DigestConfig() {
   const refreshEntries = async () => {
     try {
       const { digests } = await api("/api/digests");
-      setOutputEntries(digests.map(d => ({ id: d.id, date: d.date, mode: d.mode, savedAt: d.createdAt, content: d.content })));
+      setOutputEntries(digests.map(d => ({ id: d.id, date: d.date, mode: d.mode, savedAt: d.createdAt, content: d.content, lookback: d.lookback })));
     } catch(e) { /* server offline — badge already shows it */ }
   };
 

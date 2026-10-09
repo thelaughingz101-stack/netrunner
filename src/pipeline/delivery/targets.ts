@@ -4,7 +4,7 @@ import { DateTime } from 'luxon';
 import nodemailer from 'nodemailer';
 import { env } from '../../env.js';
 import { outputDir } from '../../config/store.js';
-import { discordChunks, fileContent, mdToHtml } from '../format/index.js';
+import { catchUpText, discordChunks, fileContent, mdToHtml } from '../format/index.js';
 import type { DeliveryTarget } from './types.js';
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
@@ -54,7 +54,8 @@ export const email = (transportFactory = (opts: object) => nodemailer.createTran
     const { html, subjectLabel } = mdToHtml(input.digest, input.mode, input.lookbackWindow, ctx.today);
     const e = env();
     const to = ctx.config.delivery.emailAddress || e.EMAIL_TO!;
-    const subject = `${subjectLabel} — ${ctx.today}`;
+    const covers = catchUpText(input.mode, input.lookbackWindow);
+    const subject = `${subjectLabel} — ${ctx.today}${covers ? ` (${covers.replace(/^Covers the /, '')})` : ''}`;
     return {
       summary: `to ${to}: "${subject}"`,
       preview: { 'email.html': html, 'email-subject.txt': subject },

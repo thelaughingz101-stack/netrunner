@@ -8,7 +8,7 @@ You pick the topics and sources. An AI (Google Gemini, Claude, or a local Ollama
 
 ## Quick start (Windows, no technical knowledge needed)
 
-1. **Download NetRunner.** On the GitHub page, click the green **Code** button → **Download ZIP**.
+1. **Download NetRunner.** Open the [latest release](../../releases/latest) and click **NetRunner-vX.Y.Z.zip** under *Assets*.
 2. **Extract it.** Right-click the downloaded zip → **Extract All…** → choose a folder you'll keep, for example `Documents\NetRunner`.
    NetRunner runs from this folder, so don't run it from inside the zip and don't delete the folder afterwards.
 3. **Double-click `Setup NetRunner`** in the extracted folder.

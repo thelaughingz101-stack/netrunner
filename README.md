@@ -1,4 +1,4 @@
-# NetRunner
+<p align="center"><img src="docs/netrunner-banner.svg" alt="NetRunner" width="100%"></p>
 
 **NetRunner reads ~160 news sites, YouTube channels and subreddits for you and turns them into one short, organised news digest, on a schedule, delivered to Discord, email or a file.**
 

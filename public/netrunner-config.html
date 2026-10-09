@@ -1,0 +1,1889 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NetRunner</title>
+<link rel="icon" href="netrunner.ico">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<!-- Pinned + vendored (served by the NetRunner server) — no unpinned CDN at runtime -->
+<script src="/vendor/react-18.3.1.production.min.js"></script>
+<script src="/vendor/react-dom-18.3.1.production.min.js"></script>
+<script src="/vendor/babel-standalone-7.29.10.min.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box}
+html,body{margin:0;padding:0;background:#0c0809;height:100%}
+#root{height:100vh}
+@keyframes nr-sweep-x{from{background-position:0 0}to{background-position:420px 0}}
+@keyframes nr-wave-y{0%,100%{transform:translateY(0)}50%{transform:translateY(28px)}}
+@keyframes nr-stream-x{from{background-position:0 0}to{background-position:-300px 0}}
+@keyframes nr-jitter{0%,100%{transform:translateX(0)}20%{transform:translateX(-4px)}40%{transform:translateX(3px)}60%{transform:translateX(-2px)}80%{transform:translateX(2px)}}
+@keyframes nr-jitter2{0%,100%{transform:translateX(0)}30%{transform:translateX(4px)}65%{transform:translateX(-3px)}}
+@keyframes nr-bar{0%,90%,100%{opacity:0}91%{opacity:.55}95%{opacity:.55}96%{opacity:0}}
+::-webkit-scrollbar{width:10px}
+::-webkit-scrollbar-track{background:#0c0809}
+::-webkit-scrollbar-thumb{background:#2c1d20}
+::-webkit-scrollbar-thumb:hover{background:#ff6d3a66}
+input[type=time]::-webkit-calendar-picker-indicator{filter:invert(.55) sepia(1) saturate(6) hue-rotate(335deg)}
+.nr-textarea{padding:12px !important;box-sizing:border-box;resize:vertical}
+.nr-textarea::-webkit-resizer{background:transparent}
+.nr-textarea::-webkit-scrollbar-corner{background:transparent}
+select option{background:#16100f;color:#f3eeec}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script id="nr-src" type="text/plain">
+const { useState, useEffect } = React;
+
+// ── DATA ─────────────────────────────────────────────────────────────────────
+
+// Topics and sources come from the server's single catalog (GET /api/catalog), loaded
+// before this script compiles — no more hand-synced copy of the feed list here.
+const TOPICS  = window.NR_CATALOG.topics;
+const SOURCES = window.NR_CATALOG.sources;
+
+const TIMEZONES = [
+  "America/New_York","America/Chicago","America/Denver","America/Los_Angeles",
+  "America/Phoenix","America/Anchorage","Pacific/Honolulu","Europe/London",
+  "Europe/Paris","Europe/Berlin","Asia/Tokyo","Asia/Shanghai","Asia/Dubai",
+  "Asia/Kolkata","Australia/Sydney","Pacific/Auckland"
+];
+
+const buildDefaultSources = () => {
+  const out = {};
+  Object.values(SOURCES).forEach(types =>
+    Object.values(types).forEach(list =>
+      list.forEach(s => { out[s] = true; })
+    )
+  );
+  return out;
+};
+
+// Catalog sources that are actually fetched — excludes xCancel, which is "Coming Soon"
+// pending per-user X API key support (see Custom Sources tab). Shared by SourcesTab
+// (per-category counts) and the dashboard's total SOURCES stat so both agree.
+const COUNTABLE_SOURCE_SET = new Set(
+  Object.values(SOURCES).flatMap(types =>
+    Object.entries(types).filter(([type]) => type !== "xCancel").flatMap(([, list]) => list)
+  )
+);
+
+const BLANK_CONFIG = {
+  topics:  Object.fromEntries(TOPICS.map(t => [t, false])),
+  sources: Object.fromEntries(Object.keys(buildDefaultSources()).map(k => [k, false])),
+  delivery: { discord:false, email:false, emailAddress:"", textFile:false, openInApp:false, chatbotExport:false, chatbotPlatform:"chatgpt", outputPath:"", fileFormat:"md" },
+  schedule: { enabled:true, morningTime:"07:00", nightlyTime:"20:00", timezone:"America/New_York", frequency:"twice_daily", skipWeekends:false, lookbackWindow:"12h" },
+  llm:  { mode:"llm", primary:"gemini", fallbackChain:["claude","ollama"] },
+  format: { summaryLength:"2-3", language:"English", sectionOrder:[...TOPICS], showExcluded:true, showEverythingElse:true },
+  filters: { shorts:true, promotional:true },
+  rollups: { weekly:false, monthly:false },
+  customSources: { rss:[], youtube:[], xcancel:[] }
+};
+
+const DEFAULT_CONFIG = {
+  ...BLANK_CONFIG,
+  topics:  Object.fromEntries(TOPICS.map(t => [t, true])),
+  sources: buildDefaultSources(),
+};
+
+// ── HELPERS ──────────────────────────────────────────────────────────────────
+
+const deepClone = o => JSON.parse(JSON.stringify(o));
+
+// NetRunner server REST API (same origin). Throws with the server's error message on non-2xx.
+const api = async (path, { method = "GET", body, timeoutMs = 30000 } = {}) => {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(path, { method, signal: ctrl.signal,
+      headers: body !== undefined ? { "Content-Type": "application/json" } : undefined,
+      body: body !== undefined ? JSON.stringify(body) : undefined });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const detail = data.issues ? data.issues.map(i => `${i.path}: ${i.message}`).join("; ") : (data.error || "");
+      throw Object.assign(new Error(`HTTP ${res.status}${detail ? " — " + detail : ""}`), { status: res.status, data });
+    }
+    return data;
+  } catch (e) {
+    if (e.name === "AbortError") throw new Error(`Timed out after ${Math.round(timeoutMs / 1000)}s`);
+    throw e;
+  } finally { clearTimeout(timer); }
+};
+
+const setPath = (obj, path, value) => {
+  const keys = path.split(".");
+  const next = deepClone(obj);
+  let cur = next;
+  for (let i = 0; i < keys.length - 1; i++) cur = cur[keys[i]];
+  cur[keys[keys.length - 1]] = value;
+  return next;
+};
+
+// ── NETRUNNER · n8n × CYBERPUNK TOKENS ────────────────────────────────────────
+// orange  = n8n primary / enabled · crimson = HUD frame + alert · cyan = current selection
+
+const C = {
+  bg:       "#0c0809",
+  bg2:      "#0f0a0c",
+  panel:    "#16100f",
+  panel2:   "#120c0d",
+  border:   "#2c1d20",
+  orange:   "#ff6d3a",
+  orangeDim:"#ff6d3a1c",
+  orangeLn: "#ff6d3a66",
+  red:      "#ff2e3d",
+  redDim:   "#ff2e3d18",
+  redLn:    "#ff2e3d55",
+  cyan:     "#3dd8e8",
+  cyanDim:  "#3dd8e818",
+  green:    "#46d39a",
+  text:     "#f3eeec",
+  body:     "#bcb0b1",
+  muted:    "#857579",
+  faint:    "#4d3c41",
+  pill:     "#1a1214",
+};
+
+const F = {
+  disp: "'Rajdhani', sans-serif",
+  body: "'IBM Plex Sans', sans-serif",
+  mono: "'IBM Plex Mono', monospace",
+};
+
+const NOTCH = "polygon(0 0, 100% 0, 100% calc(100% - 9px), calc(100% - 9px) 100%, 0 100%)";
+
+const s = {
+  card:   { background:C.panel, border:`1px solid ${C.border}`, borderRadius:5, padding:"22px 26px", marginBottom:16, position:"relative" },
+  h1:     { fontFamily:F.disp, fontSize:34, fontWeight:700, color:C.text, margin:"0 0 4px", letterSpacing:"0.01em", lineHeight:1 },
+  label:  { fontFamily:F.body, fontSize:12, color:C.muted, fontWeight:600, letterSpacing:"0.02em", display:"block", marginBottom:7 },
+  input:  { background:C.bg, border:`1px solid ${C.border}`, borderRadius:4, color:C.text, padding:"10px 12px", fontSize:14, fontFamily:F.body, width:"100%", outline:"none", boxSizing:"border-box" },
+  select: { background:C.bg, border:`1px solid ${C.border}`, borderRadius:4, color:C.text, padding:"10px 36px 10px 12px", fontSize:14, fontFamily:F.body, outline:"none", appearance:"none", WebkitAppearance:"none", backgroundImage:`url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%23857579' stroke-width='1.8' fill='none' stroke-linecap='round'/%3E%3C/svg%3E")`, backgroundRepeat:"no-repeat", backgroundPosition:"right 12px center" },
+  btn:    { fontFamily:F.disp, padding:"10px 18px", borderRadius:4, fontSize:15, cursor:"pointer", border:"none", fontWeight:600, letterSpacing:"0.04em" },
+  tag:    { display:"inline-flex", alignItems:"center", gap:6, background:C.pill, border:`1px solid ${C.border}`, borderRadius:4, padding:"6px 11px", fontSize:13, fontFamily:F.body, color:C.body },
+  sub:    { color:C.muted, fontSize:14, fontFamily:F.body, lineHeight:1.55 },
+};
+
+// ── SECTION HEADER ────────────────────────────────────────────────────────────
+
+function SectionTitle({ children, hint }) {
+  return (
+    <div style={{ display:"flex", alignItems:"center", gap:11, marginBottom:18 }}>
+      <span style={{ width:4, height:17, background:C.red, boxShadow:`0 0 9px ${C.red}99` }} />
+      <span style={{ fontFamily:F.disp, fontSize:17, fontWeight:700, color:C.text, letterSpacing:"0.05em", textTransform:"uppercase" }}>{children}</span>
+      {hint && <span style={{ fontFamily:F.body, fontSize:12.5, color:C.muted, marginLeft:2 }}>{hint}</span>}
+    </div>
+  );
+}
+
+// ── CONTROLS ──────────────────────────────────────────────────────────────────
+
+function Toggle({ on, onChange }) {
+  return (
+    <div onClick={() => onChange(!on)} style={{ width:46, height:24, borderRadius:4, background: on ? C.orange : C.pill, border:`1px solid ${on ? C.orange : C.border}`, cursor:"pointer", position:"relative", transition:"all .18s", flexShrink:0, boxShadow: on ? `0 0 16px ${C.orange}55` : "none" }}>
+      <div style={{ position:"absolute", top:3, left: on ? 24 : 3, width:16, height:16, borderRadius:3, background: on ? "#1a0d07" : C.faint, transition:"left .18s" }} />
+    </div>
+  );
+}
+
+function Radio({ on, onClick }) {
+  return (
+    <div onClick={onClick} style={{ width:20, height:20, borderRadius:"50%", border:`2px solid ${on ? C.cyan : C.border}`, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0, boxShadow: on ? `0 0 12px ${C.cyan}55` : "none" }}>
+      {on && <div style={{ width:8, height:8, borderRadius:"50%", background:C.cyan, boxShadow:`0 0 8px ${C.cyan}` }} />}
+    </div>
+  );
+}
+
+function Row({ label, sub, children }) {
+  return (
+    <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"13px 0", borderBottom:`1px solid ${C.border}`, gap:16 }}>
+      <div>
+        <div style={{ fontSize:15, fontFamily:F.body, color:C.text, fontWeight:500 }}>{label}</div>
+        {sub && <div style={{ fontSize:13, fontFamily:F.body, color:C.muted, marginTop:2 }}>{sub}</div>}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+// ── ANIMATED GLITCH BACKGROUND ────────────────────────────────────────────────
+
+const BG_PATTERNS = ["scan","stream","bands","off"];
+const BG_LABEL = { scan:"Scanline", stream:"Data Stream", bands:"Signal Bands", off:"Minimal" };
+
+function GlitchBG({ pattern }) {
+  const base = { position:"absolute", inset:0, pointerEvents:"none" };
+  const layers = [];
+
+  // shared: faint warm grid + vignette + right-edge red glow (cyberpunk ref)
+  layers.push(React.createElement("div", { key:"grid", style:{ ...base, opacity:.5,
+    backgroundImage:`linear-gradient(${C.red}0a 1px, transparent 1px), linear-gradient(90deg, ${C.red}0a 1px, transparent 1px)`,
+    backgroundSize:"46px 46px" } }));
+  layers.push(React.createElement("div", { key:"vig", style:{ ...base,
+    background:`radial-gradient(125% 90% at 50% 0%, transparent 50%, ${C.bg} 100%)` } }));
+  layers.push(React.createElement("div", { key:"glow", style:{ position:"absolute", top:0, bottom:0, right:0, width:160, pointerEvents:"none",
+    background:`linear-gradient(270deg, ${C.red}1c, transparent)` } }));
+  layers.push(React.createElement("div", { key:"edge", style:{ position:"absolute", top:"12%", bottom:"12%", right:0, width:3, pointerEvents:"none",
+    background:C.red, boxShadow:`0 0 22px 3px ${C.red}88`, opacity:.7 } }));
+
+  if (pattern === "scan") {
+    layers.push(React.createElement("div", { key:"sl", style:{ ...base,
+      background:"repeating-linear-gradient(0deg, transparent 0 2px, rgba(0,0,0,.22) 2px 3px)" } }));
+    layers.push(React.createElement("div", { key:"sw", style:{ ...base,
+      backgroundImage:`linear-gradient(90deg, transparent, ${C.orange}10 45%, ${C.red}14 55%, transparent)`,
+      backgroundSize:"420px 100%", backgroundRepeat:"repeat", animation:"nr-sweep-x 5.5s linear infinite" } }));
+  } else if (pattern === "stream") {
+    for (let i = 0; i < 5; i++) {
+      layers.push(React.createElement("div", { key:"st"+i, style:{ position:"absolute", left:0, right:0, height:1.5,
+        top:(13 + i*17)+"%", pointerEvents:"none",
+        backgroundImage:`repeating-linear-gradient(90deg, ${i%2 ? C.red : C.orange}26 0 18px, transparent 18px 46px)`,
+        backgroundSize:"300px 100%", animation:`nr-stream-x ${3.2 + i*0.7}s linear infinite`, opacity:.8 } }));
+    }
+    layers.push(React.createElement("div", { key:"sl2", style:{ ...base, opacity:.5,
+      background:"repeating-linear-gradient(0deg, transparent 0 3px, rgba(0,0,0,.16) 3px 4px)" } }));
+  } else if (pattern === "bands") {
+    layers.push(React.createElement("div", { key:"bd", style:{ ...base,
+      background:"repeating-linear-gradient(0deg, rgba(255,255,255,.014) 0 8px, transparent 8px 22px)",
+      animation:"nr-jitter 2.6s steps(3) infinite" } }));
+    layers.push(React.createElement("div", { key:"bdr", style:{ ...base, mixBlendMode:"screen", opacity:.5,
+      background:`repeating-linear-gradient(0deg, ${C.red}0c 0 8px, transparent 8px 22px)`,
+      animation:"nr-jitter2 1.9s steps(2) infinite" } }));
+    layers.push(React.createElement("div", { key:"sl3", style:{ ...base,
+      background:"repeating-linear-gradient(0deg, transparent 0 2px, rgba(0,0,0,.20) 2px 3px)" } }));
+  }
+  return React.createElement("div", { style:{ position:"absolute", inset:0, zIndex:0, pointerEvents:"none", overflow:"hidden" } }, layers);
+}
+
+// ── LOGO ──────────────────────────────────────────────────────────────────────
+
+function Logo() {
+  return (
+    <div style={{ display:"flex", alignItems:"center" }} dangerouslySetInnerHTML={{ __html: `<svg width="230" height="73" viewBox="0 0 340 108" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g filter="url(#filter0_d_10_9)">
+<path d="M4.04 21.8H8.188L18.796 37.95H18.864V21.8H23.318V45.6H19.17L8.562 29.484H8.494V45.6H4.04V21.8ZM30.467 21.8H47.671V25.71H35.091V31.728H46.685V35.57H35.091V41.69H47.671V45.6H30.467V21.8ZM59.2122 25.71H52.1062V21.8H70.9422V25.71H63.8362V45.6H59.2122V25.71ZM95.0816 37.712V45.6H90.4576V38.766L88.4176 36.488H81.0056V45.6H76.3816V21.8H91.3076L94.9456 25.472V32.68L92.6336 35.026L95.0816 37.712ZM81.0056 32.68H89.1996L90.3896 31.49V26.866L89.1996 25.676H81.0056V32.68ZM102.045 41.52V21.8H106.669V39.922L108.403 41.656H115.067L116.801 39.922V21.8H121.425V41.52L117.345 45.6H106.125L102.045 41.52ZM128.572 21.8H132.72L143.328 37.95H143.396V21.8H147.85V45.6H143.702L133.094 29.484H133.026V45.6H128.572V21.8ZM154.999 21.8H159.147L169.755 37.95H169.823V21.8H174.277V45.6H170.129L159.521 29.484H159.453V45.6H154.999V21.8ZM181.426 21.8H198.63V25.71H186.05V31.728H197.644V35.57H186.05V41.69H198.63V45.6H181.426V21.8ZM223.465 37.712V45.6H218.841V38.766L216.801 36.488H209.389V45.6H204.765V21.8H219.691L223.329 25.472V32.68L221.017 35.026L223.465 37.712ZM209.389 32.68H217.583L218.773 31.49V26.866L217.583 25.676H209.389V32.68Z" fill="#f3eeec"/>
+</g>
+<g filter="url(#filter1_d_10_9)">
+<path d="M5.07 6.23001H4.98V11.6H4V4.62001H5.44L7.49 9.99001H7.58V4.62001H8.56V11.6H7.12L5.07 6.23001ZM11.1361 11.6V4.62001H15.5061V5.56001H12.2561V7.59001H15.3861V8.53001H12.2561V10.66H15.5061V11.6H11.1361ZM18.0222 11.6L17.5222 4.62001H18.5022L18.7522 8.68001L18.8622 10.47H18.9422L19.7322 6.31001H20.8422L21.6322 10.47H21.7122L21.8222 8.68001L22.0822 4.62001H23.0222L22.5222 11.6H21.0222L20.3122 7.56001H20.2322L19.5222 11.6H18.0222ZM27.2083 11.72C26.6016 11.72 26.0916 11.6133 25.6783 11.4C25.2649 11.1867 24.9249 10.9033 24.6583 10.55L25.3783 9.86001C25.6449 10.18 25.9283 10.4167 26.2283 10.57C26.5283 10.7167 26.8683 10.79 27.2483 10.79C27.6883 10.79 28.0249 10.69 28.2583 10.49C28.4983 10.29 28.6183 10.0033 28.6183 9.63001C28.6183 9.33001 28.5316 9.10001 28.3583 8.94001C28.1849 8.77334 27.8883 8.65334 27.4683 8.58001L26.7083 8.46001C26.3749 8.40667 26.0949 8.32001 25.8683 8.20001C25.6416 8.07334 25.4583 7.92667 25.3183 7.76001C25.1783 7.58667 25.0749 7.39667 25.0083 7.19001C24.9483 6.97667 24.9183 6.75334 24.9183 6.52001C24.9183 5.86001 25.1316 5.36001 25.5583 5.02001C25.9849 4.67334 26.5716 4.50001 27.3183 4.50001C27.8716 4.50001 28.3416 4.59001 28.7283 4.77001C29.1216 4.94334 29.4383 5.19001 29.6783 5.51001L28.9783 6.21001C28.7849 5.97667 28.5549 5.79001 28.2883 5.65001C28.0283 5.50334 27.7049 5.43001 27.3183 5.43001C26.9049 5.43001 26.5883 5.52001 26.3683 5.70001C26.1549 5.87334 26.0483 6.13001 26.0483 6.47001C26.0483 6.75667 26.1316 6.98334 26.2983 7.15001C26.4716 7.31001 26.7749 7.42667 27.2083 7.50001L27.9483 7.63001C28.5749 7.74334 29.0316 7.97334 29.3183 8.32001C29.6049 8.66001 29.7483 9.07667 29.7483 9.57001C29.7483 9.89001 29.6916 10.1833 29.5783 10.45C29.4716 10.7167 29.3083 10.9433 29.0883 11.13C28.8749 11.3167 28.6083 11.4633 28.2883 11.57C27.9749 11.67 27.6149 11.72 27.2083 11.72ZM34.2644 11.7C33.9444 11.7 33.7177 11.6333 33.5844 11.5C33.4577 11.3667 33.3944 11.2033 33.3944 11.01V10.75C33.3944 10.5567 33.4577 10.3933 33.5844 10.26C33.7177 10.1267 33.9444 10.06 34.2644 10.06C34.5844 10.06 34.8077 10.1267 34.9344 10.26C35.0677 10.3933 35.1344 10.5567 35.1344 10.75V11.01C35.1344 11.2033 35.0677 11.3667 34.9344 11.5C34.8077 11.6333 34.5844 11.7 34.2644 11.7ZM34.2644 7.98001C33.9444 7.98001 33.7177 7.91334 33.5844 7.78001C33.4577 7.64667 33.3944 7.48334 33.3944 7.29001V7.03001C33.3944 6.83667 33.4577 6.67334 33.5844 6.54001C33.7177 6.40667 33.9444 6.34001 34.2644 6.34001C34.5844 6.34001 34.8077 6.40667 34.9344 6.54001C35.0677 6.67334 35.1344 6.83667 35.1344 7.03001V7.29001C35.1344 7.48334 35.0677 7.64667 34.9344 7.78001C34.8077 7.91334 34.5844 7.98001 34.2644 7.98001ZM39.0905 12.98L42.4605 4.00001H43.4305L40.0605 12.98H39.0905ZM46.0866 12.98L49.4566 4.00001H50.4266L47.0566 12.98H46.0866ZM53.0727 4.62001H55.1527C56.046 4.62001 56.706 4.91667 57.1327 5.51001C57.566 6.10334 57.7827 6.97001 57.7827 8.11001C57.7827 9.25001 57.566 10.1167 57.1327 10.71C56.706 11.3033 56.046 11.6 55.1527 11.6H53.0727V4.62001ZM55.0827 10.68C55.596 10.68 55.976 10.51 56.2227 10.17C56.476 9.82334 56.6027 9.33001 56.6027 8.69001V7.53001C56.6027 6.89001 56.476 6.40001 56.2227 6.06001C55.976 5.71334 55.596 5.54001 55.0827 5.54001H54.1827V10.68H55.0827ZM60.0487 11.6V10.75H61.6887V5.47001H60.0487V4.62001H64.4487V5.47001H62.8087V10.75H64.4487V11.6H60.0487ZM70.5448 10.64H70.4748C70.4148 10.78 70.3415 10.9167 70.2548 11.05C70.1748 11.1767 70.0715 11.29 69.9448 11.39C69.8248 11.49 69.6782 11.57 69.5048 11.63C69.3315 11.69 69.1315 11.72 68.9048 11.72C68.1782 11.72 67.6315 11.41 67.2648 10.79C66.8982 10.17 66.7148 9.29334 66.7148 8.16001C66.7148 6.97334 66.9248 6.06667 67.3448 5.44001C67.7648 4.81334 68.4082 4.50001 69.2748 4.50001C69.6148 4.50001 69.9115 4.54667 70.1648 4.64001C70.4248 4.73334 70.6448 4.86001 70.8248 5.02001C71.0048 5.17334 71.1548 5.35667 71.2748 5.57001C71.3948 5.77667 71.4915 5.99667 71.5648 6.23001L70.5548 6.57001C70.5015 6.41667 70.4415 6.27334 70.3748 6.14001C70.3082 6.00001 70.2248 5.87667 70.1248 5.77001C70.0315 5.66334 69.9148 5.58001 69.7748 5.52001C69.6415 5.46001 69.4782 5.43001 69.2848 5.43001C68.7982 5.43001 68.4448 5.62001 68.2248 6.00001C68.0115 6.37334 67.9048 6.88001 67.9048 7.52001V8.63001C67.9048 8.95001 67.9282 9.24334 67.9748 9.51001C68.0215 9.77667 68.0982 10.0067 68.2048 10.2C68.3182 10.3867 68.4615 10.5333 68.6348 10.64C68.8148 10.7467 69.0315 10.8 69.2848 10.8C69.6915 10.8 70.0015 10.68 70.2148 10.44C70.4348 10.1933 70.5448 9.88001 70.5448 9.50001V8.87001H69.1948V8.03001H71.5648V11.6H70.5448V10.64ZM74.1009 11.6V4.62001H78.4709V5.56001H75.2209V7.59001H78.3509V8.53001H75.2209V10.66H78.4709V11.6H74.1009ZM83.177 11.72C82.5704 11.72 82.0604 11.6133 81.647 11.4C81.2337 11.1867 80.8937 10.9033 80.627 10.55L81.347 9.86001C81.6137 10.18 81.897 10.4167 82.197 10.57C82.497 10.7167 82.837 10.79 83.217 10.79C83.657 10.79 83.9937 10.69 84.227 10.49C84.467 10.29 84.587 10.0033 84.587 9.63001C84.587 9.33001 84.5004 9.10001 84.327 8.94001C84.1537 8.77334 83.857 8.65334 83.437 8.58001L82.677 8.46001C82.3437 8.40667 82.0637 8.32001 81.837 8.20001C81.6104 8.07334 81.427 7.92667 81.287 7.76001C81.147 7.58667 81.0437 7.39667 80.977 7.19001C80.917 6.97667 80.887 6.75334 80.887 6.52001C80.887 5.86001 81.1004 5.36001 81.527 5.02001C81.9537 4.67334 82.5404 4.50001 83.287 4.50001C83.8404 4.50001 84.3104 4.59001 84.697 4.77001C85.0904 4.94334 85.407 5.19001 85.647 5.51001L84.947 6.21001C84.7537 5.97667 84.5237 5.79001 84.257 5.65001C83.997 5.50334 83.6737 5.43001 83.287 5.43001C82.8737 5.43001 82.557 5.52001 82.337 5.70001C82.1237 5.87334 82.017 6.13001 82.017 6.47001C82.017 6.75667 82.1004 6.98334 82.267 7.15001C82.4404 7.31001 82.7437 7.42667 83.177 7.50001L83.917 7.63001C84.5437 7.74334 85.0004 7.97334 85.287 8.32001C85.5737 8.66001 85.717 9.07667 85.717 9.57001C85.717 9.89001 85.6604 10.1833 85.547 10.45C85.4404 10.7167 85.277 10.9433 85.057 11.13C84.8437 11.3167 84.577 11.4633 84.257 11.57C83.9437 11.67 83.5837 11.72 83.177 11.72ZM90.7931 5.56001V11.6H89.6731V5.56001H87.4831V4.62001H92.9831V5.56001H90.7931ZM97.2292 11.7C96.9092 11.7 96.6826 11.6333 96.5492 11.5C96.4226 11.3667 96.3592 11.2033 96.3592 11.01V10.75C96.3592 10.5567 96.4226 10.3933 96.5492 10.26C96.6826 10.1267 96.9092 10.06 97.2292 10.06C97.5492 10.06 97.7726 10.1267 97.8992 10.26C98.0326 10.3933 98.0992 10.5567 98.0992 10.75V11.01C98.0992 11.2033 98.0326 11.3667 97.8992 11.5C97.7726 11.6333 97.5492 11.7 97.2292 11.7ZM104.225 11.72C103.785 11.72 103.402 11.64 103.075 11.48C102.755 11.3133 102.489 11.0767 102.275 10.77C102.069 10.4633 101.915 10.0867 101.815 9.64001C101.715 9.19334 101.665 8.68334 101.665 8.11001C101.665 7.54334 101.715 7.03667 101.815 6.59001C101.915 6.13667 102.069 5.75667 102.275 5.45001C102.489 5.14334 102.755 4.91001 103.075 4.75001C103.402 4.58334 103.785 4.50001 104.225 4.50001C104.665 4.50001 105.045 4.58334 105.365 4.75001C105.692 4.91001 105.959 5.14334 106.165 5.45001C106.379 5.75667 106.535 6.13667 106.635 6.59001C106.735 7.03667 106.785 7.54334 106.785 8.11001C106.785 8.68334 106.735 9.19334 106.635 9.64001C106.535 10.0867 106.379 10.4633 106.165 10.77C105.959 11.0767 105.692 11.3133 105.365 11.48C105.045 11.64 104.665 11.72 104.225 11.72ZM104.225 10.79C104.725 10.79 105.079 10.6033 105.285 10.23C105.492 9.85001 105.595 9.33667 105.595 8.69001V7.52001C105.595 6.88001 105.492 6.37334 105.285 6.00001C105.079 5.62001 104.725 5.43001 104.225 5.43001C103.725 5.43001 103.372 5.62001 103.165 6.00001C102.959 6.37334 102.855 6.88001 102.855 7.52001V8.70001C102.855 9.34001 102.959 9.85001 103.165 10.23C103.372 10.6033 103.725 10.79 104.225 10.79ZM109.061 11.6V4.62001H111.671C112.338 4.62001 112.845 4.80667 113.191 5.18001C113.545 5.55334 113.721 6.06667 113.721 6.72001C113.721 7.37334 113.545 7.88667 113.191 8.26001C112.845 8.63334 112.338 8.82001 111.671 8.82001H110.181V11.6H109.061ZM110.181 7.89001H111.501C112.195 7.89001 112.541 7.57001 112.541 6.93001V6.50001C112.541 5.86667 112.195 5.55001 111.501 5.55001H110.181V7.89001ZM118.157 11.72C117.551 11.72 117.041 11.6133 116.627 11.4C116.214 11.1867 115.874 10.9033 115.607 10.55L116.327 9.86001C116.594 10.18 116.877 10.4167 117.177 10.57C117.477 10.7167 117.817 10.79 118.197 10.79C118.637 10.79 118.974 10.69 119.207 10.49C119.447 10.29 119.567 10.0033 119.567 9.63001C119.567 9.33001 119.481 9.10001 119.307 8.94001C119.134 8.77334 118.837 8.65334 118.417 8.58001L117.657 8.46001C117.324 8.40667 117.044 8.32001 116.817 8.20001C116.591 8.07334 116.407 7.92667 116.267 7.76001C116.127 7.58667 116.024 7.39667 115.957 7.19001C115.897 6.97667 115.867 6.75334 115.867 6.52001C115.867 5.86001 116.081 5.36001 116.507 5.02001C116.934 4.67334 117.521 4.50001 118.267 4.50001C118.821 4.50001 119.291 4.59001 119.677 4.77001C120.071 4.94334 120.387 5.19001 120.627 5.51001L119.927 6.21001C119.734 5.97667 119.504 5.79001 119.237 5.65001C118.977 5.50334 118.654 5.43001 118.267 5.43001C117.854 5.43001 117.537 5.52001 117.317 5.70001C117.104 5.87334 116.997 6.13001 116.997 6.47001C116.997 6.75667 117.081 6.98334 117.247 7.15001C117.421 7.31001 117.724 7.42667 118.157 7.50001L118.897 7.63001C119.524 7.74334 119.981 7.97334 120.267 8.32001C120.554 8.66001 120.697 9.07667 120.697 9.57001C120.697 9.89001 120.641 10.1833 120.527 10.45C120.421 10.7167 120.257 10.9433 120.037 11.13C119.824 11.3167 119.557 11.4633 119.237 11.57C118.924 11.67 118.564 11.72 118.157 11.72ZM130.7 9.10001V8.01001H133.72V9.10001H130.7ZM145.422 11.6L143.452 4.62001H144.662L145.582 8.14001L146.192 10.51H146.252L146.862 8.14001L147.792 4.62001H148.952L146.982 11.6H145.422ZM151.078 11.6V10.67H153.038V5.44001H152.958L151.338 7.17001L150.648 6.55001L152.428 4.62001H154.158V10.67H155.848V11.6H151.078ZM160.194 11.7C159.874 11.7 159.647 11.6333 159.514 11.5C159.387 11.3667 159.324 11.2033 159.324 11.01V10.75C159.324 10.5567 159.387 10.3933 159.514 10.26C159.647 10.1267 159.874 10.06 160.194 10.06C160.514 10.06 160.737 10.1267 160.864 10.26C160.997 10.3933 161.064 10.5567 161.064 10.75V11.01C161.064 11.2033 160.997 11.3667 160.864 11.5C160.737 11.6333 160.514 11.7 160.194 11.7ZM167.19 11.72C166.75 11.72 166.367 11.64 166.04 11.48C165.72 11.3133 165.453 11.0767 165.24 10.77C165.033 10.4633 164.88 10.0867 164.78 9.64001C164.68 9.19334 164.63 8.68334 164.63 8.11001C164.63 7.54334 164.68 7.03667 164.78 6.59001C164.88 6.13667 165.033 5.75667 165.24 5.45001C165.453 5.14334 165.72 4.91001 166.04 4.75001C166.367 4.58334 166.75 4.50001 167.19 4.50001C167.63 4.50001 168.01 4.58334 168.33 4.75001C168.657 4.91001 168.923 5.14334 169.13 5.45001C169.343 5.75667 169.5 6.13667 169.6 6.59001C169.7 7.03667 169.75 7.54334 169.75 8.11001C169.75 8.68334 169.7 9.19334 169.6 9.64001C169.5 10.0867 169.343 10.4633 169.13 10.77C168.923 11.0767 168.657 11.3133 168.33 11.48C168.01 11.64 167.63 11.72 167.19 11.72ZM167.19 10.8C167.697 10.8 168.057 10.6133 168.27 10.24C168.49 9.86001 168.6 9.35001 168.6 8.71001V7.51001C168.6 6.87001 168.49 6.36334 168.27 5.99001C168.057 5.61001 167.697 5.42001 167.19 5.42001C166.937 5.42001 166.72 5.47001 166.54 5.57001C166.36 5.66334 166.213 5.80334 166.1 5.99001C165.987 6.17001 165.903 6.39001 165.85 6.65001C165.803 6.90334 165.78 7.19001 165.78 7.51001V8.71001C165.78 9.03001 165.803 9.32001 165.85 9.58001C165.903 9.83334 165.987 10.0533 166.1 10.24C166.213 10.42 166.36 10.56 166.54 10.66C166.72 10.7533 166.937 10.8 167.19 10.8ZM167.19 8.70001C166.957 8.70001 166.793 8.65334 166.7 8.56001C166.613 8.46667 166.57 8.35334 166.57 8.22001V8.00001C166.57 7.86667 166.613 7.75334 166.7 7.66001C166.793 7.56667 166.957 7.52001 167.19 7.52001C167.423 7.52001 167.583 7.56667 167.67 7.66001C167.763 7.75334 167.81 7.86667 167.81 8.00001V8.22001C167.81 8.35334 167.763 8.46667 167.67 8.56001C167.583 8.65334 167.423 8.70001 167.19 8.70001Z" fill="#ff2e3d"/>
+</g>
+<g filter="url(#filter2_d_10_9)">
+<rect x="231.83" y="19.6" width="5" height="26" fill="#ff2e3d"/>
+</g>
+<defs>
+<filter id="filter0_d_10_9" x="0.0400085" y="17.8" width="227.425" height="31.8" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+<feFlood flood-opacity="0" result="BackgroundImageFix"/>
+<feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+<feOffset/>
+<feGaussianBlur stdDeviation="2"/>
+<feComposite in2="hardAlpha" operator="out"/>
+<feColorMatrix type="matrix" values="0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.15 0"/>
+<feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_10_9"/>
+<feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_10_9" result="shape"/>
+</filter>
+<filter id="filter1_d_10_9" x="0" y="0" width="173.75" height="16.98" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+<feFlood flood-opacity="0" result="BackgroundImageFix"/>
+<feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+<feOffset/>
+<feGaussianBlur stdDeviation="2"/>
+<feComposite in2="hardAlpha" operator="out"/>
+<feColorMatrix type="matrix" values="0 0 0 0 1 0 0 0 0 0.231373 0 0 0 0 0.184314 0 0 0 0.25 0"/>
+<feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_10_9"/>
+<feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_10_9" result="shape"/>
+</filter>
+<filter id="filter2_d_10_9" x="225.83" y="13.6" width="17" height="38" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+<feFlood flood-opacity="0" result="BackgroundImageFix"/>
+<feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+<feMorphology radius="2" operator="dilate" in="SourceAlpha" result="effect1_dropShadow_10_9"/>
+<feOffset/>
+<feGaussianBlur stdDeviation="2"/>
+<feComposite in2="hardAlpha" operator="out"/>
+<feColorMatrix type="matrix" values="0 0 0 0 1 0 0 0 0 0.231373 0 0 0 0 0.184314 0 0 0 0.09 0"/>
+<feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_10_9"/>
+<feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_10_9" result="shape"/>
+</filter>
+</defs>
+</svg>` }} />
+  );
+}
+
+function N8nBadge({ status }) {
+  const connected = status === "connected";
+  const checking  = status === "checking";
+  const dotColor  = checking ? C.muted : connected ? C.green : C.red;
+  const label     = checking ? "server checking…" : connected ? "server connected" : "server offline";
+  return (
+    <div style={{ display:"inline-flex", alignItems:"center", gap:7, padding:"5px 11px", borderRadius:20,
+      border:`1px solid ${connected ? C.orangeLn : checking ? C.border : C.redLn}`,
+      background: connected ? C.orangeDim : checking ? "transparent" : C.redDim }}>
+      <span style={{ width:7, height:7, borderRadius:"50%", background:dotColor, boxShadow:`0 0 8px ${dotColor}` }} />
+      <span style={{ fontFamily:F.mono, fontSize:11, color: connected ? C.orange : checking ? C.muted : C.red, letterSpacing:"0.04em" }}>{label}</span>
+    </div>
+  );
+}
+
+// ── TABS META ─────────────────────────────────────────────────────────────────
+
+// ── MARKDOWN → HTML (Obsidian-style reading view) ────────────────────────────
+function renderMD(md) {
+  if (!md) return "";
+  let html = md
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/^### (.+)$/gm, '<h3 class="md-h3">$1</h3>')
+    .replace(/^## (.+)$/gm, '<h2 class="md-h2">$1</h2>')
+    .replace(/^# (.+)$/gm, '<h1 class="md-h1">$1</h1>')
+    .replace(/\[\*\*(.+?)\*\*\]\((.+?)\)/g, '<a class="md-link" href="$2" target="_blank" rel="noopener"><strong>$1</strong></a>')
+    .replace(/\[(.+?)\]\((.+?)\)/g, '<a class="md-link" href="$2" target="_blank" rel="noopener">$1</a>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*\((.+?)\)\*/g, '<em class="md-source">($1)</em>')
+    .replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, '<em>$1</em>')
+    .replace(/^---+$/gm, '<hr class="md-hr"/>')
+    .replace(/^- (.+)$/gm, '<li class="md-li">$1</li>');
+  html = html.replace(/(<li class="md-li">.*?<\/li>\n?)+/gs, m => `<ul class="md-ul">${m}</ul>`);
+  html = html.split(/\n{2,}/).map(block => {
+    if (/^<(h1|h2|h3|ul|hr)/.test(block.trim())) return block;
+    const t = block.trim();
+    return t ? `<p class="md-p">${t.replace(/\n/g, "<br/>")}</p>` : "";
+  }).join("\n");
+  return html;
+}
+
+const MD_STYLE = `
+.md-reader{font-family:${'inherit'};line-height:1.75;}
+.md-h1{font-size:1.5em;font-weight:700;margin:0 0 .6em;color:#f3eeec;}
+.md-h2{font-size:1.22em;font-weight:700;margin:1.5em 0 .55em;padding-bottom:.35em;border-bottom:1px solid #2c1d20;color:#f3eeec;}
+.md-h3{font-size:1.05em;font-weight:700;margin:1.1em 0 .4em;color:#f3eeec;}
+.md-p{margin:0 0 .85em;color:#cdbfba;}
+.md-ul{margin:.2em 0 1em;padding-left:1.3em;}
+.md-li{margin:.32em 0;color:#cdbfba;}
+.md-link{color:#ff6d3a;text-decoration:none;border-bottom:1px solid #ff6d3a66;}
+.md-link:hover{border-bottom-color:#ff6d3a;}
+.md-source{color:#857579;font-style:italic;}
+.md-hr{border:none;border-top:1px solid #2c1d20;margin:1.6em 0;}
+`;
+
+// Custom feeds live at the bottom of Sources ("Add your own"); Recaps live on the Schedule tab.
+const TABS = [
+  { id:"templates", label:"Start" },
+  { id:"topics",    label:"Topics" },
+  { id:"sources",   label:"Sources" },
+  { id:"format",    label:"Format" },
+  { id:"llm",       label:"AI Writer" },
+  { id:"schedule",  label:"Schedule" },
+  { id:"delivery",  label:"Delivery" },
+  { id:"output",    label:"Output" },
+];
+
+// ── SECTIONS ──────────────────────────────────────────────────────────────────
+
+function TemplatesTab({ onApply }) {
+  return (
+    <div>
+      <h1 style={s.h1}>Get started</h1>
+      <p style={{ ...s.sub, marginBottom:26 }}>Pick a starting point, then fine-tune everything in the steps that follow. Your digest runs on your NetRunner server.</p>
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:18 }}>
+        {[
+          { id:"default", title:"Everything on", desc:"Every category and every source enabled — the complete digest as shipped.", tag:"RECOMMENDED", color:C.orange },
+          { id:"blank",   title:"Start fresh", desc:"Every option off. Switch on only the topics and sources you care about.", tag:"BLANK", color:C.muted },
+        ].map(t => (
+          <div key={t.id} style={{ ...s.card, cursor:"pointer", marginBottom:0, transition:"border-color .15s", clipPath:NOTCH }}
+               onClick={() => onApply(t.id)}
+               onMouseEnter={e => e.currentTarget.style.borderColor = C.orangeLn}
+               onMouseLeave={e => e.currentTarget.style.borderColor = C.border}>
+            <div style={{ fontFamily:F.mono, fontSize:10.5, letterSpacing:"0.14em", color:t.color, border:`1px solid ${t.color}55`, display:"inline-block", padding:"4px 9px", borderRadius:3, marginBottom:15 }}>{t.tag}</div>
+            <div style={{ fontFamily:F.disp, fontSize:24, fontWeight:700, color:C.text, marginBottom:7, letterSpacing:"0.01em" }}>{t.title}</div>
+            <div style={{ fontSize:14, fontFamily:F.body, color:C.muted, marginBottom:20, lineHeight:1.55 }}>{t.desc}</div>
+            <button style={{ ...s.btn, background:C.orange, color:"#1a0d07", boxShadow:`0 0 18px ${C.orange}33`, clipPath:NOTCH }}>Use this →</button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function TopicsTab({ config, update }) {
+  const allOn = TOPICS.every(t => config.topics[t]);
+  const onCount = TOPICS.filter(t => config.topics[t]).length;
+  return (
+    <div>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-end", marginBottom:20 }}>
+        <div>
+          <h1 style={s.h1}>Topics</h1>
+          <span style={{ fontFamily:F.body, fontSize:14, color:C.muted }}>{onCount} of {TOPICS.length} categories tracked</span>
+        </div>
+        <button onClick={() => TOPICS.forEach(t => update(`topics.${t}`, !allOn))} style={{ ...s.btn, background:"transparent", color:C.orange, border:`1px solid ${C.orangeLn}` }}>
+          {allOn ? "Turn all off" : "Turn all on"}
+        </button>
+      </div>
+      <div style={s.card}>
+        {TOPICS.map((t) => (
+          <Row key={t} label={t}>
+            <Toggle on={!!config.topics[t]} onChange={v => update(`topics.${t}`, v)} />
+          </Row>
+        ))}
+      </div>
+      <div style={s.card}>
+        <SectionTitle hint="always at the end of the digest">Catch-all sections</SectionTitle>
+        <Row label="📋 Everything Else" sub="Stories from your enabled sources that don't fit any topic above. When off, they're left out of Discord, email, the saved file and the Output tab (Output can still show them).">
+          <Toggle on={config.format.showEverythingElse !== false} onChange={v => update("format.showEverythingElse", v)} />
+        </Row>
+        <Row label="🗒️ Excluded list" sub="Stories the AI skipped and why (duplicate, stale, filler…). Same on/off behaviour.">
+          <Toggle on={config.format.showExcluded !== false} onChange={v => update("format.showExcluded", v)} />
+        </Row>
+      </div>
+    </div>
+  );
+}
+
+function SourcesTab({ config, update }) {
+  const [openCat, setOpenCat] = useState(null);
+
+  const setAllInCategory = (allSrcs, value) => {
+    const next = { ...config.sources };
+    allSrcs.forEach(src => { next[src] = value; });
+    update("sources", next);
+  };
+
+  return (
+    <div>
+      <h1 style={{ ...s.h1, marginBottom:6 }}>Sources</h1>
+      <p style={{ ...s.sub, marginBottom:22 }}>Choose individual feeds per category. Only sources under an enabled topic get fetched.</p>
+      <div style={s.card}>
+        <SectionTitle hint="dropped before the AI sees them">Skip filler</SectionTitle>
+        <Row label="Skip YouTube Shorts" sub="Drop Shorts from every channel, built-in and your own">
+          <Toggle on={config.filters?.shorts !== false} onChange={v => update("filters.shorts", v)} />
+        </Row>
+        <Row label="Skip promo clips" sub="Movie/TV clips, featurettes, launch and accolades trailers, “now playing” spots, promo codes. Announcement and reveal trailers are kept.">
+          <Toggle on={config.filters?.promotional !== false} onChange={v => update("filters.promotional", v)} />
+        </Row>
+      </div>
+      {Object.entries(SOURCES).map(([cat, types]) => {
+        const allSrcs = Object.values(types).flat();
+        // xCancel is "Coming Soon" (not actually fetched yet) — exclude it from the countable/toggleable set
+        // while still rendering it below via the untouched Object.entries(types) loop.
+        // NOTE: filter by type key locally, not by name membership in a global set — several
+        // categories (Gaming, TV & Movies, etc.) reuse the same account name across both an
+        // xCancel entry and a real RSS/YouTube entry, and a name-based test would wrongly
+        // let those xCancel entries back into the count via the collision.
+        const countableSrcs = Object.entries(types).filter(([type]) => type !== "xCancel").flatMap(([, list]) => list);
+        const topicOn = config.topics[cat] !== false;
+        const enabledCount = topicOn ? countableSrcs.filter(src => config.sources[src]).length : 0;
+        const open = openCat === cat;
+        const pct = countableSrcs.length ? enabledCount / countableSrcs.length : 0;
+        const allOn = countableSrcs.length > 0 && countableSrcs.every(src => config.sources[src]);
+        return (
+          <div key={cat} style={{ ...s.card, marginBottom:10, padding:0, overflow:"hidden", borderColor: open ? C.orangeLn : C.border, opacity: topicOn ? 1 : 0.45 }}>
+            <div
+              onClick={() => setOpenCat(open ? null : cat)}
+              style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"16px 22px", cursor:"pointer", userSelect:"none" }}
+            >
+              <div style={{ display:"flex", alignItems:"center", gap:13 }}>
+                <span style={{ width:8, height:8, borderRadius:"50%", background: !topicOn ? C.faint : pct === 0 ? C.faint : pct === 1 ? C.orange : C.red, boxShadow: topicOn && pct > 0 ? `0 0 9px ${pct === 1 ? C.orange : C.red}` : "none" }} />
+                <span style={{ fontFamily:F.disp, fontSize:19, fontWeight:700, color:C.text, letterSpacing:"0.01em" }}>{cat}</span>
+                <span style={{ fontFamily:F.body, fontSize:13, color:C.muted }}>{enabledCount}/{countableSrcs.length}</span>
+                {!topicOn && <span style={{ fontFamily:F.mono, fontSize:10.5, color:C.red, letterSpacing:"0.05em", border:`1px solid ${C.redLn}`, background:C.redDim, borderRadius:3, padding:"2px 7px" }}>TOPIC OFF</span>}
+              </div>
+              <div style={{ display:"flex", alignItems:"center", gap:14 }}>
+                <span
+                  onClick={e => { e.stopPropagation(); setAllInCategory(allSrcs, !allOn); }}
+                  style={{ fontFamily:F.mono, fontSize:11, color:C.orange, letterSpacing:"0.04em", cursor:"pointer", border:`1px solid ${C.orangeLn}`, borderRadius:3, padding:"4px 9px" }}
+                >
+                  {allOn ? "Deselect all" : "Select all"}
+                </span>
+                <span style={{ display:"inline-flex", alignItems:"center", justifyContent:"center", width:24, height:24, transition:"transform .15s", transform: open ? "rotate(180deg)" : "none" }}>
+                  <svg width="13" height="9" viewBox="0 0 12 8" fill="none"><path d="M1 1l5 5 5-5" stroke={open ? C.orange : "#857579"} strokeWidth="1.8" fill="none" strokeLinecap="round"/></svg>
+                </span>
+              </div>
+            </div>
+            {open && (
+              <div style={{ borderTop:`1px solid ${C.border}`, padding:"16px 22px 20px", background:C.panel2 }}>
+                {!topicOn && (
+                  <p style={{ fontFamily:F.body, fontSize:12.5, color:C.red, marginBottom:14 }}>This topic is disabled on the Topics tab, so none of these sources will be fetched regardless of their state below.</p>
+                )}
+                {Object.entries(types).map(([type, list]) => {
+                  const disabled = type === "xCancel";
+                  return (
+                  <div key={type} style={{ marginBottom:8 }}>
+                    <span style={{ fontFamily:F.body, fontSize:12, fontWeight:600, color:C.muted, letterSpacing:"0.06em", textTransform:"uppercase", display:"block", margin:"10px 0 9px" }}>
+                      {type === "xCancel" ? "X" : type}{disabled && <span style={{ marginLeft:8, fontFamily:F.mono, fontSize:10, letterSpacing:"0.04em", color:C.faint, textTransform:"none", border:`1px solid ${C.border}`, borderRadius:3, padding:"2px 7px" }}>COMING SOON</span>}
+                    </span>
+                    <div style={{ display:"flex", flexWrap:"wrap", gap:7, opacity: disabled ? 0.4 : 1 }}>
+                      {list.map(src => {
+                        const on = topicOn && !!config.sources[src];
+                        return (
+                          <div
+                            key={src}
+                            onClick={disabled ? undefined : () => update(`sources.${src}`, !config.sources[src])}
+                            style={{ ...s.tag, cursor: disabled ? "default" : "pointer", background: on ? C.orangeDim : C.pill, borderColor: on ? C.orangeLn : C.border, color: on ? C.orange : C.muted }}
+                          >
+                            <span style={{ fontWeight:700, opacity: on ? 1 : .65 }}>{on ? "✓" : "+"}</span> {src}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// Shows whether a server-side secret is set in .env — the value itself never reaches the browser.
+// Plain status text, deliberately not styled like an input or button: there's nothing to click.
+// Keys and delivery settings stored in the server's .env, editable here. The server never sends a secret
+// back: only whether it's set and its last 4 characters. Values are written straight into .env.
+const KeysCtx = React.createContext({ keys:{}, saveKeys: async () => {} });
+
+function KeyField({ k, label, secret = true, placeholder = "", help }) {
+  const { keys, saveKeys } = React.useContext(KeysCtx);
+  const st = keys[k] || { set:false };
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  // Non-secret settings (host, port, user…) are shown and edited in place.
+  const current = secret ? "" : (st.value || "");
+  useEffect(() => { if (!secret) setValue(current); }, [current, secret]);
+  const save = async (v) => {
+    setBusy(true); setErr("");
+    try { await saveKeys({ [k]: v }); setEditing(false); if (secret) setValue(""); }
+    catch(e) { setErr(e.message); }
+    setBusy(false);
+  };
+  const small = { ...s.btn, fontSize:13, padding:"7px 12px" };
+  const ghost = { ...small, background:"transparent", color:C.orange, border:`1px solid ${C.orangeLn}` };
+  return (
+    <div style={{ marginBottom:16 }}>
+      <label style={s.label}>{label}</label>
+      {secret && !editing ? (
+        <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+          <span style={{ fontFamily:F.body, fontSize:13.5, color: st.set ? C.body : C.red }}>
+            <span style={{ color: st.set ? C.green : C.red, fontWeight:700, marginRight:8 }}>{st.set ? "✓" : "✕"}</span>
+            {st.set ? (st.hint ? <>Saved <span style={{ fontFamily:F.mono, color:C.faint }}>••••{st.hint}</span></> : "Saved") : "Not set"}
+          </span>
+          <button style={ghost} onClick={() => { setEditing(true); setErr(""); }}>{st.set ? "Change" : "Add"}</button>
+          {st.set && <button style={{ ...ghost, color:C.muted, borderColor:C.border }} disabled={busy} onClick={() => { if (window.confirm(`Remove ${label}?`)) save(""); }}>Clear</button>}
+        </div>
+      ) : (
+        <div style={{ display:"flex", gap:8 }}>
+          <input style={{ ...s.input, flex:1 }} type={secret ? "password" : "text"} autoComplete="off" spellCheck={false}
+            value={value} placeholder={placeholder} onChange={e => setValue(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter" && (secret ? value.trim() : value !== current)) save(value.trim()); if (e.key === "Escape" && secret) setEditing(false); }} />
+          {(secret || value !== current) && (
+            <button style={small} disabled={busy || (secret && !value.trim())} onClick={() => save(value.trim())}>{busy ? "Saving…" : "Save"}</button>
+          )}
+          {secret && <button style={{ ...ghost, color:C.muted, borderColor:C.border }} onClick={() => { setEditing(false); setValue(""); }}>Cancel</button>}
+        </div>
+      )}
+      {help && <p style={{ fontFamily:F.body, fontSize:11.5, color:C.faint, marginTop:7, marginBottom:0, lineHeight:1.5 }}>{help}</p>}
+      {err && <p style={{ fontFamily:F.body, fontSize:12, color:C.red, marginTop:6, marginBottom:0 }}>{err}</p>}
+    </div>
+  );
+}
+
+function EnvFileLinks() {
+  const open = how => api("/api/keys/open", { method:"POST", body:{ how } }).catch(e => window.alert("Couldn't open it: " + e.message));
+  const link = { fontFamily:F.mono, fontSize:11.5, color:C.orange, cursor:"pointer", background:"none", border:"none", padding:0, textDecoration:"underline", textUnderlineOffset:3 };
+  return (
+    <p style={{ fontFamily:F.body, fontSize:12, color:C.faint, margin:"6px 0 0", lineHeight:1.6 }}>
+      Saved to the server's .env file and used right away, no restart needed. Prefer editing by hand? <button style={link} onClick={() => open("file")}>Open .env</button> · <button style={link} onClick={() => open("folder")}>Show in folder</button>
+    </p>
+  );
+}
+
+function DeliveryTab({ config, update, secrets = {} }) {
+  return (
+    <div>
+      <h1 style={{ ...s.h1, marginBottom:20 }}>Delivery</h1>
+      <div style={s.card}>
+        <SectionTitle hint="where your digest lands">Outputs</SectionTitle>
+        <Row label="Discord" sub="Post the digest to a Discord channel via webhook">
+          <Toggle on={!!config.delivery.discord} onChange={v => update("delivery.discord", v)} />
+        </Row>
+        {config.delivery.discord && (
+          <div style={{ padding:"14px 0 4px" }}>
+            <KeyField k="DISCORD_WEBHOOK_URL" label="Discord webhook URL" placeholder="https://discord.com/api/webhooks/…"
+              help="In Discord: Server Settings → Integrations → Webhooks → New Webhook, pick the channel, then Copy Webhook URL and paste it here. No bot setup needed." />
+            <EnvFileLinks />
+          </div>
+        )}
+        <Row label="Email" sub="Send the digest to an email address">
+          <Toggle on={!!config.delivery.email} onChange={v => update("delivery.email", v)} />
+        </Row>
+        {config.delivery.email && (
+          <div style={{ padding:"14px 0 4px" }}>
+            <label style={s.label}>Email address</label>
+            <input style={s.input} value={config.delivery.emailAddress} onChange={e => update("delivery.emailAddress", e.target.value)} placeholder="you@example.com" />
+            <p style={{ fontFamily:F.body, fontSize:11.5, color:C.faint, marginTop:8, lineHeight:1.5 }}>
+              The address the digest gets sent to. Below is the account that sends it.
+            </p>
+            <div style={{ marginTop:18, paddingTop:16, borderTop:`1px solid ${C.border}` }}>
+              <SectionTitle hint={secrets.smtp ? "ready" : "needs host, user and password"}>Sending account</SectionTitle>
+              <div style={{ display:"grid", gridTemplateColumns:"minmax(0,2fr) minmax(0,1fr)", gap:"0 14px" }}>
+                <KeyField k="SMTP_HOST" label="SMTP server" secret={false} placeholder="smtp.gmail.com" />
+                <KeyField k="SMTP_PORT" label="Port" secret={false} placeholder="465" />
+              </div>
+              <KeyField k="SMTP_USER" label="Username" secret={false} placeholder="you@gmail.com" />
+              <KeyField k="SMTP_PASS" label="Password" help="For Gmail, use an App Password (Google Account → Security → App passwords), not your normal password." />
+              <KeyField k="EMAIL_FROM" label="From address (optional)" secret={false} placeholder="defaults to the username" />
+              <EnvFileLinks />
+            </div>
+          </div>
+        )}
+        <Row label="Open in NetRunner" sub="When a scheduled digest is ready, open the app on it. Every digest is also kept in the Output tab either way.">
+          <Toggle on={!!config.delivery.openInApp} onChange={v => update("delivery.openInApp", v)} />
+        </Row>
+        <Row label="Save to file" sub="Write the digest to a local file on the server">
+          <Toggle on={!!config.delivery.textFile} onChange={v => update("delivery.textFile", v)} />
+        </Row>
+        {config.delivery.textFile && (
+          <div style={{ padding:"14px 0 0" }}>
+            <label style={s.label}>Output folder</label>
+            <input style={s.input} value={config.delivery.outputPath} onChange={e => update("delivery.outputPath", e.target.value)} placeholder="(blank = the server's data/output folder)" />
+            <div style={{ display:"flex", gap:8, marginTop:12 }}>
+              {["md","txt"].map(f => {
+                const sel = config.delivery.fileFormat===f;
+                return (
+                  <button key={f} onClick={() => update("delivery.fileFormat", f)} style={{ ...s.btn, fontSize:14, background: sel ? C.orange : "transparent", color: sel ? "#1a0d07" : C.muted, border:`1px solid ${sel ? C.orange : C.border}` }}>
+                    .{f}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+      </div>
+    </div>
+  );
+}
+
+// What's actually scheduled right now (Windows Task Scheduler, or the server's own timer elsewhere).
+// Reflects the last Save — unsaved edits on this tab aren't scheduled yet.
+function NextRuns() {
+  const [info, setInfo] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    const load = () => api("/api/runs").then(r => alive && setInfo(r.next)).catch(() => alive && setInfo({ error:true }));
+    load();
+    const t = setInterval(load, 30000);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
+  const fmt = iso => iso ? new Date(iso).toLocaleString(undefined, { weekday:"short", month:"short", day:"numeric", hour:"numeric", minute:"2-digit" }) : "—";
+  const jobs = info && !info.error ? info.jobs : [];
+  return (
+    <div style={s.card}>
+      <SectionTitle hint={!info?.backend ? undefined : info.backend === "windows" ? "runs even when this window is closed" : "runs while the server is running"}>Next runs</SectionTitle>
+      {!info && <p style={{ ...s.sub, margin:0 }}>Checking…</p>}
+      {info?.error && <p style={{ ...s.sub, margin:0, color:C.red }}>Couldn't read the schedule from the server.</p>}
+      {info && !info.error && !jobs.length && <p style={{ ...s.sub, margin:0 }}>Nothing scheduled.</p>}
+      {jobs.map(j => (
+        <div key={j.name} style={{ display:"flex", justifyContent:"space-between", gap:12, padding:"9px 0", borderBottom:`1px solid ${C.border}`, fontFamily:F.body, fontSize:14 }}>
+          <span style={{ color:C.text, textTransform:"capitalize" }}>{j.name}</span>
+          <span style={{ color:C.orange, fontFamily:F.mono, fontSize:12.5 }}>{fmt(j.next)}</span>
+        </div>
+      ))}
+      {info?.backend === "windows" && (
+        <p style={{ fontFamily:F.body, fontSize:12, color:C.faint, marginTop:12, marginBottom:0, lineHeight:1.5 }}>
+          Scheduled through Windows Task Scheduler: digests run with NetRunner closed, can wake the PC from sleep, and a run missed while the PC was off starts when it's back on. Press Save to apply changes below.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function ScheduleTab({ config, update }) {
+  const freq = config.schedule.frequency;
+  const morningActive = freq !== "weekly";
+  const nightlyActive = freq === "twice_daily";
+  const dimStyle = { opacity:0.35, pointerEvents:"none" };
+  const enabled = config.schedule.enabled !== false;
+  const LOOKBACK_OPTIONS = [
+    { id:"12h", label:"12 hours" },
+    { id:"24h", label:"24 hours" },
+    { id:"3d",  label:"3 days" },
+    { id:"1w",  label:"1 week" },
+    { id:"2w",  label:"2 weeks" },
+    { id:"1mo", label:"1 month" },
+  ];
+  return (
+    <div>
+      <h1 style={{ ...s.h1, marginBottom:20 }}>Schedule</h1>
+      <div style={s.card}>
+        <Row label="Automatic digests" sub={enabled ? "On: digests and recaps run on the schedule below" : "Off: nothing runs on its own. Use Run News Digest whenever you want one."}>
+          <Toggle on={enabled} onChange={v => update("schedule.enabled", v)} />
+        </Row>
+      </div>
+      <NextRuns />
+      <div style={enabled ? {} : dimStyle}>
+      <div style={s.card}>
+        <SectionTitle>How often</SectionTitle>
+        {[
+          { id:"twice_daily", label:"Twice daily", sub:"Morning + nightly digest" },
+          { id:"once_daily",  label:"Once daily",  sub:"Morning digest only" },
+          { id:"weekly",      label:"Weekly",       sub:"One Sunday digest covering the whole week" },
+        ].map(f => (
+          <Row key={f.id} label={f.label} sub={f.sub}>
+            <Radio on={config.schedule.frequency===f.id} onClick={() => update("schedule.frequency", f.id)} />
+          </Row>
+        ))}
+      </div>
+      <div style={s.card}>
+        <SectionTitle>Times</SectionTitle>
+        {freq === "weekly" ? (
+          <div style={{ marginBottom:18 }}>
+            <label style={s.label}>Weekly digest</label>
+            <input type="time" style={s.input} value={config.schedule.morningTime} onChange={e => update("schedule.morningTime", e.target.value)} />
+          </div>
+        ) : (
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16, marginBottom:18 }}>
+            <div style={morningActive ? {} : dimStyle}>
+              <label style={s.label}>Morning digest</label>
+              <input type="time" style={s.input} value={config.schedule.morningTime} onChange={e => update("schedule.morningTime", e.target.value)} disabled={!morningActive} />
+            </div>
+            <div style={nightlyActive ? {} : dimStyle}>
+              <label style={s.label}>Nightly digest</label>
+              <input type="time" style={s.input} value={config.schedule.nightlyTime} onChange={e => update("schedule.nightlyTime", e.target.value)} disabled={!nightlyActive} />
+            </div>
+          </div>
+        )}
+        <label style={s.label}>Timezone</label>
+        <select style={{ ...s.select, width:"100%" }} value={config.schedule.timezone} onChange={e => update("schedule.timezone", e.target.value)}>
+          {TIMEZONES.map(tz => <option key={tz} value={tz}>{tz}</option>)}
+        </select>
+        <div style={{ marginTop:16 }}>
+          <Row label="Skip weekends" sub="No digest on Saturday or Sunday">
+            <Toggle on={!!config.schedule.skipWeekends} onChange={v => update("schedule.skipWeekends", v)} />
+          </Row>
+        </div>
+      </div>
+      </div>
+      <div style={s.card}>
+        <SectionTitle hint="how old can stories be?">Catch-up range</SectionTitle>
+        <p style={{ fontFamily:F.body, fontSize:12.5, color:C.faint, marginTop:-6, marginBottom:14 }}>
+          How far back NetRunner looks for stories on every run, scheduled or manual. 12 hours suits twice-daily digests; pick 24 hours for once daily. (The weekly digest always covers a week.)
+        </p>
+        {LOOKBACK_OPTIONS.map(o => (
+          <Row key={o.id} label={o.label}>
+            <Radio on={(config.schedule.lookbackWindow || "12h")===o.id} onClick={() => update("schedule.lookbackWindow", o.id)} />
+          </Row>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function BoltIcon({ color }) {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+      <path d="M13 2 L4 14 H11 L10 22 L20 9 H13 L13 2 Z" stroke={color} strokeWidth="1.7" fill={`${color}26`} strokeLinejoin="round" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function PasteIcon({ color }) {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+      <rect x="5.5" y="4.5" width="13" height="16.5" rx="1.6" stroke={color} strokeWidth="1.7" />
+      <rect x="9" y="2.5" width="6" height="3.4" rx="1.1" stroke={color} strokeWidth="1.7" fill={C.bg2} />
+      <path d="M9 11.5 H15 M9 14.5 H15 M9 17.5 H13" stroke={color} strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function ModeCard({ variant, selected, onClick, option, title, desc, icon, badge }) {
+  const auto = variant === "auto";
+  const base = {
+    position:"relative", cursor:"pointer", borderRadius:5, padding:"20px 22px 18px",
+    transition:"border-color .15s, box-shadow .15s, background .15s", display:"flex", flexDirection:"column", minHeight:196, boxSizing:"border-box",
+  };
+  const style = !selected
+    ? { ...base, border:`1px solid ${C.border}`, background:C.panel }
+    : auto
+      ? { ...base, border:`1px solid ${C.orange}`, background:`linear-gradient(155deg, ${C.orange}22, ${C.panel})`, boxShadow:`0 0 26px ${C.orange}33` }
+      : { ...base, border:`1px solid ${C.orange}`, background:C.panel2, boxShadow:`inset 3px 0 0 ${C.orange}` };
+  const iconColor = selected ? C.orange : C.muted;
+  return (
+    <div onClick={onClick} style={style}
+         onMouseEnter={e => { if(!selected) e.currentTarget.style.borderColor = C.orangeLn; }}
+         onMouseLeave={e => { if(!selected) e.currentTarget.style.borderColor = C.border; }}>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:14 }}>
+        <span style={{ fontFamily:F.mono, fontSize:10, letterSpacing:"0.16em", color: selected ? C.orange : C.faint }}>{option}</span>
+        <Radio on={selected} onClick={onClick} />
+      </div>
+      <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:10 }}>
+        <span style={{ display:"flex", alignItems:"center", justifyContent:"center", width:38, height:38, borderRadius:4, flexShrink:0,
+          background: selected ? `${C.orange}1c` : C.pill, border:`1px solid ${selected ? C.orangeLn : C.border}` }}>{icon(iconColor)}</span>
+        <span style={{ fontFamily:F.disp, fontSize:25, fontWeight:700, color:C.text, letterSpacing:"0.01em" }}>{title}</span>
+      </div>
+      <div style={{ fontSize:13.5, fontFamily:F.body, color:C.body, lineHeight:1.55, marginBottom:16, flex:1 }}>{desc}</div>
+      {badge}
+    </div>
+  );
+}
+
+function CopyBox({ label, value, height, filename }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(value || "");
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch(e) { /* clipboard permission denied — user can still click-select the box */ }
+  };
+  const handleDownload = () => {
+    const blob = new Blob([value || ""], { type: "text/markdown" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename || `${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}.md`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+  return (
+    <div style={{ marginBottom:16 }}>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8 }}>
+        <span style={{ fontFamily:F.disp, fontSize:14, fontWeight:700, color:C.text, letterSpacing:"0.03em", textTransform:"uppercase" }}>{label}</span>
+        <div style={{ display:"flex", gap:8 }}>
+          <button onClick={handleDownload} style={{ ...s.btn, fontSize:12, padding:"6px 12px", background:"transparent", color:C.orange, border:`1px solid ${C.orangeLn}` }}>
+            Download .md
+          </button>
+          <button onClick={handleCopy} style={{ ...s.btn, fontSize:12, padding:"6px 12px", background: copied ? C.green : "transparent", color: copied ? "#1a0d07" : C.orange, border:`1px solid ${copied ? C.green : C.orangeLn}` }}>
+            {copied ? "✓ Copied" : "Copy"}
+          </button>
+        </div>
+      </div>
+      <textarea
+        readOnly
+        value={value}
+        onClick={e => e.target.select()}
+        style={{ ...s.input, height, resize:"vertical", fontFamily:F.mono, fontSize:12, lineHeight:1.55, cursor:"text" }}
+      />
+    </div>
+  );
+}
+
+// Free Copy-Paste result: one obvious button; the raw text is there for anyone who wants to look.
+function PromptReady({ parts, platform }) {
+  const [copied, setCopied] = useState(false);
+  const [showRaw, setShowRaw] = useState(false);
+  const full = `${parts.systemInstructions}\n\n${'='.repeat(60)}\nYOUR REQUEST\n${'='.repeat(60)}\n\n${parts.userRequest}`;
+  const name = platform ? platform.charAt(0).toUpperCase() + platform.slice(1) : "your chatbot";
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(full);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2500);
+    } catch(e) { setShowRaw(true); } // clipboard blocked: show the text so it can be selected by hand
+  };
+  return (
+    <div>
+      <button onClick={copy} style={{ ...s.btn, width:"100%", fontSize:18, padding:"16px 18px", clipPath:NOTCH,
+        background: copied ? C.green : C.orange, color:"#1a0d07", boxShadow:`0 0 22px ${(copied ? C.green : C.orange)}33` }}>
+        {copied ? `✓ Copied — now paste it into ${name}` : "Copy Prompt to Clipboard"}
+      </button>
+      {parts.howToUse && <p style={{ ...s.sub, fontSize:13.5, marginTop:14, marginBottom:4, whiteSpace:"pre-line" }}>{parts.howToUse}</p>}
+      <p style={{ fontFamily:F.body, fontSize:12, color:C.faint, marginTop:8 }}>Also saved to the Output tab.</p>
+      <button onClick={() => setShowRaw(v => !v)} style={{ ...s.btn, fontSize:12.5, padding:"6px 0", background:"transparent", color:C.muted, marginTop:6 }}>
+        {showRaw ? "▾ Hide raw prompt text" : "▸ Show raw prompt text"}
+      </button>
+      {showRaw && (
+        <div style={{ marginTop:10 }}>
+          <CopyBox label="How to Use" value={parts.howToUse} height={110} />
+          <CopyBox label="System Instructions + Your Request" value={full} height={420} filename="netrunner-prompt.md" />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LLMTab({config, update, updateLLMPrimary, runForPrompt, promptResult, promptParts, promptRunState, secrets = {} }) {
+  const chain = config.llm.fallbackChain;
+  const move = (i, dir) => {
+    const next = [...chain];
+    const j = i + dir;
+    if (j < 0 || j >= next.length) return;
+    [next[i], next[j]] = [next[j], next[i]];
+    update("llm.fallbackChain", next);
+  };
+
+  const isAuto  = config.llm.mode === "llm";
+  const primary = config.llm.primary;
+  const cap     = w => w.charAt(0).toUpperCase() + w.slice(1);
+
+  return (
+    <div>
+      <h1 style={{ ...s.h1, marginBottom:6 }}>AI Writer</h1>
+      <p style={{ ...s.sub, marginBottom:22 }}>Choose how NetRunner turns your sources into a finished digest.</p>
+
+      <SectionTitle>Mode</SectionTitle>
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16, marginBottom:24 }}>
+        <ModeCard
+          variant="auto"
+          selected={isAuto}
+          onClick={() => update("llm.mode", "llm")}
+          option="OPTION A"
+          title="Autopilot"
+          icon={c => <BoltIcon color={c} />}
+          desc="NetRunner runs the digest for you. Connects to Gemini, Claude, or Ollama — pick your model, add your API key, and it writes and delivers the digest automatically."
+          badge={
+            <span style={{ display:"inline-block", fontFamily:F.mono, fontSize:10, letterSpacing:"0.12em", padding:"5px 10px", borderRadius:3,
+              background: isAuto ? C.orange : "transparent", color: isAuto ? "#1a0d07" : C.orange, border:`1px solid ${isAuto ? C.orange : C.orangeLn}` }}>
+              RECOMMENDED
+            </span>
+          }
+        />
+        <ModeCard
+          variant="manual"
+          selected={!isAuto}
+          onClick={() => update("llm.mode", "chatbot")}
+          option="OPTION B"
+          title="Free Copy-Paste"
+          icon={c => <PasteIcon color={c} />}
+          desc="NetRunner prepares the prompt. You paste it into any AI chatbot — ChatGPT, Claude, Gemini, Grok, DeepSeek — and it returns your digest."
+          badge={
+            <span style={{ display:"inline-flex", alignItems:"center", gap:6, fontFamily:F.mono, fontSize:10, letterSpacing:"0.12em", padding:"5px 10px", borderRadius:3,
+              color:C.green, border:`1px solid ${C.green}55`, background:`${C.green}12` }}>
+              <span style={{ width:6, height:6, borderRadius:"50%", background:C.green, boxShadow:`0 0 7px ${C.green}` }} /> NO API KEY NEEDED
+            </span>
+          }
+        />
+      </div>
+
+      {isAuto && (
+        <React.Fragment>
+          <div style={s.card}>
+            <SectionTitle>Primary model</SectionTitle>
+            {["gemini","claude","ollama"].map(m => {
+              const disabled = false; // Ollama is wired as a real tier now (RSS-only, no web search)
+              return (
+              <Row key={m} label={<span style={{ opacity: disabled ? 0.45 : 1 }}>{cap(m)}</span>} sub={m==="gemini" ? "Recommended — Google Search grounding" : m==="claude" ? "Claude Haiku — web search fallback" : "Local — RSS-only, no web search"}>
+                <Radio on={primary===m} onClick={disabled ? undefined : () => updateLLMPrimary(m)} />
+              </Row>
+              );
+            })}
+          </div>
+          <div style={s.card}>
+            <SectionTitle hint="keys live in the server's .env, never in the browser or config">API keys</SectionTitle>
+            <KeyField k="GEMINI_API_KEY" label="Gemini API key" placeholder="AIza…" help="Get one at aistudio.google.com → Get API key." />
+            <KeyField k="ANTHROPIC_API_KEY" label="Claude API key" placeholder="sk-ant-…" help="Get one at console.anthropic.com → API Keys." />
+            <KeyField k="OLLAMA_URL" label="Ollama address" secret={false} placeholder="http://localhost:11434" help="Ollama runs locally, so it needs no key, just the address it listens on." />
+            <EnvFileLinks />
+          </div>
+          <div style={s.card}>
+            <SectionTitle hint="runs in order if the primary fails">Fallback chain</SectionTitle>
+            {chain.map((m, i) => {
+              const disabled = false;
+              return (
+              <div key={m} style={{ display:"flex", alignItems:"center", gap:13, padding:"11px 0", borderBottom:`1px solid ${C.border}`, opacity: disabled ? 0.45 : 1 }}>
+                <span style={{ fontFamily:F.disp, fontSize:16, fontWeight:700, color:C.orange, width:22 }}>{i+1}</span>
+                <span style={{ fontSize:15, fontFamily:F.body, color:C.text, flex:1 }}>{cap(m)}{disabled && <span style={{ marginLeft:8, fontFamily:F.mono, fontSize:10, letterSpacing:"0.04em", color:C.faint, border:`1px solid ${C.border}`, borderRadius:3, padding:"2px 7px" }}>COMING SOON</span>}</span>
+                <button onClick={() => move(i,-1)} disabled={i===0} style={{ ...s.btn, fontSize:13, background:"transparent", color: i===0 ? C.faint : C.body, padding:"4px 10px", border:`1px solid ${C.border}` }}>↑</button>
+                <button onClick={() => move(i,1)} disabled={i===chain.length-1} style={{ ...s.btn, fontSize:13, background:"transparent", color: i===chain.length-1 ? C.faint : C.body, padding:"4px 10px", border:`1px solid ${C.border}` }}>↓</button>
+              </div>
+              );
+            })}
+          </div>
+        </React.Fragment>
+      )}
+
+      {!isAuto && (
+        <div style={s.card}>
+          <SectionTitle hint="how copy-paste mode works">Paste-and-go</SectionTitle>
+          <p style={{ ...s.sub, marginTop:-6, marginBottom:14 }}>No API key, no model setup. NetRunner builds the prompt; you bring the chatbot.</p>
+          {[
+            ["01","NetRunner gathers your sources and writes a ready-to-paste prompt."],
+            ["02","Drop it into ChatGPT, Claude, Gemini, Grok, or DeepSeek."],
+            ["03","The chatbot returns your finished digest — paste it back or save it."],
+          ].map(([n,t]) => (
+            <div key={n} style={{ display:"flex", gap:14, padding:"11px 0", borderBottom:`1px solid ${C.border}` }}>
+              <span style={{ fontFamily:F.mono, fontSize:12, fontWeight:600, color:C.orange, width:22, flexShrink:0 }}>{n}</span>
+              <span style={{ fontSize:14.5, fontFamily:F.body, color:C.text, lineHeight:1.5 }}>{t}</span>
+            </div>
+          ))}
+          <div style={{ paddingTop:18 }}>
+            <label style={s.label}>Target platform</label>
+            <select style={{ ...s.select, width:"100%" }} value={config.delivery.chatbotPlatform} onChange={e => update("delivery.chatbotPlatform", e.target.value)}>
+              {["chatgpt","claude","gemini","grok","deepseek"].map(p => (
+                <option key={p} value={p}>{p.charAt(0).toUpperCase()+p.slice(1)}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+      )}
+
+      {!isAuto && (
+        <div style={s.card}>
+          <SectionTitle hint="generate and preview your chatbot prompt">Prompt</SectionTitle>
+          <p style={{ ...s.sub, marginTop:-6, marginBottom:16 }}>Runs the workflow now and returns the ready-to-paste prompt for {config.delivery.chatbotPlatform ? config.delivery.chatbotPlatform.charAt(0).toUpperCase()+config.delivery.chatbotPlatform.slice(1) : "your selected platform"}. Save your config first.</p>
+          <button
+            onClick={runForPrompt}
+            disabled={promptRunState === "running"}
+            style={{ ...s.btn,
+              background: promptRunState === "success" ? C.green : promptRunState === "error" ? C.red : C.orange,
+              color: "#1a0d07", opacity: promptRunState === "running" ? 0.7 : 1,
+              display:"flex", alignItems:"center", gap:8, marginBottom: promptResult ? 18 : 0
+            }}>
+            <span style={{ fontSize:"0.85em" }}>{promptRunState === "running" ? "◌" : promptRunState === "success" ? "✓" : promptRunState === "error" ? "✕" : "▶"}</span>
+            {promptRunState === "running" ? "Generating…" : promptRunState === "success" ? "Prompt Ready" : promptRunState === "error" ? "Run Failed" : "Generate Prompt"}
+          </button>
+          {promptParts && <PromptReady parts={promptParts} platform={config.delivery.chatbotPlatform} />}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PositionInput({ value, max, label, onCommit }) {
+  const [text, setText] = useState(String(value));
+  const commit = () => {
+    const n = parseInt(text, 10);
+    if (Number.isFinite(n) && n !== value) onCommit(n);
+    else setText(String(value));
+  };
+  return (
+    <input
+      type="text" inputMode="numeric" aria-label={label} title={`Type 1–${max} and press Enter`}
+      value={text}
+      onChange={e => setText(e.target.value.replace(/[^0-9]/g, "").slice(0, 2))}
+      onFocus={e => e.target.select()}
+      onBlur={commit}
+      onKeyDown={e => { if (e.key === "Enter") e.target.blur(); if (e.key === "Escape") { setText(String(value)); e.target.blur(); } }}
+      style={{ ...s.input, width:44, padding:"5px 0", textAlign:"center", fontFamily:F.disp, fontSize:14, fontWeight:700, color:C.text }}
+    />
+  );
+}
+
+function FormatTab({ config, update }) {
+  const order = config.format.sectionOrder;
+  const cs = config.customSources || {};
+  const hasCustom = (cs.rss?.length || 0) + (cs.youtube?.length || 0) + (cs.xcancel?.length || 0) > 0;
+
+  useEffect(() => {
+    if (hasCustom && !order.includes("Custom Feeds")) {
+      update("format.sectionOrder", [...order, "Custom Feeds"]);
+    } else if (!hasCustom && order.includes("Custom Feeds")) {
+      update("format.sectionOrder", order.filter(s => s !== "Custom Feeds"));
+    }
+  }, [hasCustom]);
+
+  const isVisible = sec => sec === "Custom Feeds" ? (hasCustom && config.topics[sec] !== false) : config.topics[sec] !== false;
+  const visibleOrder = order.filter(isVisible);
+
+  const moveVisible = (sec, dir) => {
+    const next = [...order];
+    const idx = next.indexOf(sec);
+    let j = idx + dir;
+    while (j >= 0 && j < next.length && !isVisible(next[j])) j += dir;
+    if (j < 0 || j >= next.length) return;
+    [next[idx], next[j]] = [next[j], next[idx]];
+    update("format.sectionOrder", next);
+  };
+
+  // Typed position: move a section to slot `pos` (1-based) among the visible ones. Hidden sections keep
+  // their slots in the saved order, so turning a topic back on puts it where it was.
+  const moveTo = (sec, pos) => {
+    const vis = visibleOrder.filter(x => x !== sec);
+    const p = Math.max(1, Math.min(vis.length + 1, Math.round(pos)));
+    vis.splice(p - 1, 0, sec);
+    let k = 0;
+    update("format.sectionOrder", order.map(x => isVisible(x) ? vis[k++] : x));
+  };
+  return (
+    <div>
+      <h1 style={{ ...s.h1, marginBottom:20 }}>Format</h1>
+      <div style={s.card}>
+        <SectionTitle>Summary length</SectionTitle>
+        {[
+          { id:"1",   label:"One sentence",   sub:"Ultra compact" },
+          { id:"2-3", label:"2–3 sentences",  sub:"Default — context without bloat" },
+          { id:"full",label:"Full detail",    sub:"Longer summaries per item" },
+        ].map(o => (
+          <Row key={o.id} label={o.label} sub={o.sub}>
+            <Radio on={config.format.summaryLength===o.id} onClick={() => update("format.summaryLength", o.id)} />
+          </Row>
+        ))}
+      </div>
+      <div style={s.card}>
+        <Row label="Show the Excluded list" sub="The 🗒️ EXCLUDED list at the end of each digest: stories the AI skipped and why (duplicate, stale, filler…). When off, it's left out of Discord, email, the saved file and the Output tab. It's still kept, so you can peek at it from Output.">
+          <Toggle on={config.format.showExcluded !== false} onChange={v => update("format.showExcluded", v)} />
+        </Row>
+      </div>
+      <div style={s.card}>
+        <SectionTitle>Language</SectionTitle>
+        <select style={{ ...s.select, width:"100%" }} value={config.format.language} onChange={e => update("format.language", e.target.value)}>
+          {["English","Spanish","French","German","Japanese","Portuguese"].map(l => <option key={l} value={l}>{l}</option>)}
+        </select>
+      </div>
+      <div style={s.card}>
+        <SectionTitle hint="order sections appear in the digest">Section order</SectionTitle>
+        <p style={{ fontFamily:F.body, fontSize:12.5, color:C.faint, marginTop:-6, marginBottom:14 }}>Type a new position in a section's number box and press Enter, or use the arrows. Topics turned off on the Topics tab are hidden here.</p>
+        {visibleOrder.map((sec, i) => (
+          <div key={sec} style={{ display:"flex", alignItems:"center", gap:13, padding:"10px 0", borderBottom:`1px solid ${C.border}` }}>
+            <PositionInput key={`${sec}-${i}`} value={i+1} max={visibleOrder.length} label={`Position of ${sec}`} onCommit={p => moveTo(sec, p)} />
+            <span style={{ flex:1, fontSize:15, fontFamily:F.body, color:C.text }}>{sec}</span>
+            <button onClick={() => moveVisible(sec,-1)} disabled={i===0} style={{ ...s.btn, fontSize:13, background:"transparent", color: i===0 ? C.faint : C.body, padding:"4px 9px", border:`1px solid ${C.border}` }}>↑</button>
+            <button onClick={() => moveVisible(sec,1)} disabled={i===visibleOrder.length-1} style={{ ...s.btn, fontSize:13, background:"transparent", color: i===visibleOrder.length-1 ? C.faint : C.body, padding:"4px 9px", border:`1px solid ${C.border}` }}>↓</button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function RollupsTab({ config, update }) {
+  return (
+    <div>
+      <h2 style={{ ...s.h1, fontSize:24, marginTop:30, marginBottom:6 }}>Weekly & monthly recaps</h2>
+      <p style={{ ...s.sub, marginBottom:18 }}>Recaps are written from the digests NetRunner saved over the period, plus the story tracker.</p>
+      <div style={s.card}>
+        <Row label="Weekly recap" sub="Sundays at 12:00 — summarises the past 7 days of digests">
+          <Toggle on={!!config.rollups.weekly} onChange={v => update("rollups.weekly", v)} />
+        </Row>
+        <Row label="Monthly recap" sub="The 28th at 22:00 — summarises the month's digests">
+          <Toggle on={!!config.rollups.monthly} onChange={v => update("rollups.monthly", v)} />
+        </Row>
+      </div>
+    </div>
+  );
+}
+
+function CustomBulkField({ label, sub, items, onAddAll, onRemove, placeholder }) {
+  const [text, setText] = useState("");
+  const handleAddAll = () => {
+    const lines = text.split(/[\n,]+/).map(v => v.trim()).filter(Boolean);
+    if (!lines.length) return;
+    onAddAll(lines);
+    setText("");
+  };
+  return (
+    <div style={{ marginBottom:26 }}>
+      <label style={s.label}>{label}</label>
+      <p style={{ fontSize:13, fontFamily:F.body, color:C.muted, marginBottom:9 }}>{sub}</p>
+      <textarea
+        value={text}
+        onChange={e => setText(e.target.value)}
+        onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleAddAll(); }}
+        placeholder={placeholder}
+        rows={2}
+        className="nr-textarea"
+        style={{ ...s.input, padding:"12px", resize:"vertical", fontFamily:F.mono, fontSize:12.5, lineHeight:1.6 }}
+      />
+      <div style={{ marginTop:10 }}>
+        <button onClick={handleAddAll} style={{ ...s.btn, background:C.orange, color:"#1a0d07" }}>Add all</button>
+      </div>
+      <div style={{ marginTop:12, display:"flex", flexWrap:"wrap", gap:7 }}>
+        {items.map((item, i) => (
+          <span key={i} style={s.tag}>
+            {item}
+            <span onClick={() => onRemove(i)} style={{ cursor:"pointer", color:C.red, marginLeft:2, fontWeight:700 }}>✕</span>
+          </span>
+        ))}
+        {!items.length && <span style={{ fontSize:13, fontFamily:F.body, color:C.faint, fontStyle:"italic" }}>None added yet</span>}
+      </div>
+    </div>
+  );
+}
+
+function YouTubeResolveField({ items, onAddAll, onAddEntry, onRemove }) {
+  const [urlInput, setUrlInput]       = useState("");
+  const [bulkText, setBulkText]       = useState("");
+  const [resolveState, setResolveState] = useState("idle"); // idle | running | success | error
+  const [resolveError, setResolveError] = useState("");
+  const [lastAdded, setLastAdded]     = useState(null);
+  const [advanced, setAdvanced]       = useState(false);
+
+  const resetSoon = () => setTimeout(() => setResolveState("idle"), 5000);
+
+  // Resolve adds the channel straight away and shows who it found, so there's no raw ID to deal with.
+  const handleResolve = async () => {
+    if (!urlInput.trim()) return;
+    setResolveState("running");
+    setResolveError("");
+    setLastAdded(null);
+    try {
+      const data = await api("/api/resolve-youtube", { method: "POST", body: { query: urlInput.trim() } });
+      if (data && data.channelId) {
+        const entry = { id: data.channelId, handle: data.handle || null, title: data.title || null, avatar: data.avatar || null };
+        onAddEntry(entry);
+        setLastAdded(entry);
+        setResolveState("success");
+        setUrlInput("");
+      } else {
+        setResolveState("error");
+        setResolveError((data && data.error) || "Couldn't find that channel.");
+      }
+    } catch(e) {
+      setResolveState("error");
+      setResolveError((e.data && e.data.error) || e.message);
+    }
+    resetSoon();
+  };
+
+  const handleAddAll = () => {
+    const lines = bulkText.split(/[\n,]+/).map(v => v.trim()).filter(Boolean);
+    if (!lines.length) return;
+    onAddAll(lines);
+    setBulkText("");
+  };
+
+  const stateColor = resolveState === "success" ? C.green : resolveState === "error" ? C.red : C.orangeLn;
+
+  return (
+    <div style={{ marginBottom:26 }}>
+      <label style={s.label}>YouTube channels</label>
+      <p style={{ fontSize:13, fontFamily:F.body, color:C.muted, marginBottom:9 }}>Paste a channel link or @handle and press Add.</p>
+      <div style={{ display:"flex", gap:8 }}>
+        <input
+          style={{ ...s.input, flex:1 }}
+          value={urlInput}
+          onChange={e => setUrlInput(e.target.value)}
+          onKeyDown={e => e.key === "Enter" && handleResolve()}
+          placeholder="https://youtube.com/@channelname or @channelname"
+        />
+        <button
+          onClick={handleResolve}
+          disabled={resolveState === "running"}
+          style={{ ...s.btn,
+            background: resolveState === "success" ? C.green : resolveState === "error" ? C.red : "transparent",
+            color: (resolveState === "idle" || resolveState === "running") ? C.orange : "#1a0d07",
+            border: `1px solid ${stateColor}`, opacity: resolveState === "running" ? 0.7 : 1, whiteSpace:"nowrap" }}
+        >
+          {resolveState === "running" ? "Finding…" : resolveState === "success" ? "✓ Added" : resolveState === "error" ? "Not found" : "Add"}
+        </button>
+      </div>
+      {resolveState === "error" && resolveError && (
+        <p style={{ fontFamily:F.body, fontSize:12.5, color:C.red, marginTop:8 }}>{resolveError}</p>
+      )}
+      {lastAdded && (
+        <div style={{ display:"flex", alignItems:"center", gap:11, marginTop:12, padding:"10px 12px", border:`1px solid ${C.green}55`, background:`${C.green}10`, borderRadius:4 }}>
+          {lastAdded.avatar
+            ? <img src={lastAdded.avatar} alt="" referrerPolicy="no-referrer" style={{ width:34, height:34, borderRadius:"50%", flexShrink:0 }} />
+            : <span style={{ width:34, height:34, borderRadius:"50%", background:C.pill, flexShrink:0 }} />}
+          <div style={{ flex:1, minWidth:0 }}>
+            <div style={{ fontFamily:F.body, fontSize:14.5, color:C.text, fontWeight:600 }}>{lastAdded.title || lastAdded.handle || "YouTube channel"}</div>
+            {lastAdded.handle && lastAdded.title && <div style={{ fontFamily:F.body, fontSize:12, color:C.muted }}>{lastAdded.handle}</div>}
+          </div>
+          <span style={{ color:C.green, fontWeight:700, fontSize:18 }}>✓</span>
+        </div>
+      )}
+      <button onClick={() => setAdvanced(v => !v)} style={{ ...s.btn, fontSize:12.5, padding:"6px 0", background:"transparent", color:C.muted, marginTop:10 }}>
+        {advanced ? "▾ Advanced" : "▸ Advanced: paste channel IDs"}
+      </button>
+      {advanced && <div style={{ marginTop:6 }}>
+        <label style={s.label}>Channel IDs (UC…), one per line</label>
+        <textarea
+          value={bulkText}
+          onChange={e => setBulkText(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleAddAll(); }}
+          placeholder={"UCxxxxxxxxxxxxxxxxxxxxxxxx\nUCyyyyyyyyyyyyyyyyyyyyyyyy"}
+          rows={2}
+          className="nr-textarea"
+          style={{ ...s.input, padding:"12px", resize:"vertical", fontFamily:F.mono, fontSize:12.5, lineHeight:1.6 }}
+        />
+        <div style={{ marginTop:10 }}>
+          <button onClick={handleAddAll} style={{ ...s.btn, background:C.orange, color:"#1a0d07" }}>Add all</button>
+        </div>
+      </div>}
+      <div style={{ marginTop:12, display:"flex", flexWrap:"wrap", gap:7 }}>
+        {items.map((item, i) => {
+          const isObj = item && typeof item === "object";
+          const id = isObj ? item.id : item;
+          const name = isObj ? (item.title || item.handle) : null;
+          return (
+            <span key={i} style={s.tag} title={id}>
+              {isObj && item.avatar && <img src={item.avatar} alt="" referrerPolicy="no-referrer" style={{ width:18, height:18, borderRadius:"50%" }} />}
+              {name || id}
+              <span onClick={() => onRemove(i)} style={{ cursor:"pointer", color:C.red, marginLeft:2, fontWeight:700 }}>✕</span>
+            </span>
+          );
+        })}
+        {!items.length && <span style={{ fontSize:13, fontFamily:F.body, color:C.faint, fontStyle:"italic" }}>None added yet</span>}
+      </div>
+    </div>
+  );
+}
+
+function CustomSourcesTab({ config, update }) {
+  const addAll = (key, lines) => {
+    const existing = config.customSources[key];
+    const merged = [...existing];
+    lines.forEach(v => { if (!merged.includes(v)) merged.push(v); });
+    update(`customSources.${key}`, merged);
+  };
+  const addAllYoutube = (lines) => {
+    const existingIds = new Set(config.customSources.youtube.map(item => typeof item === "object" ? item.id : item));
+    const merged = [...config.customSources.youtube];
+    lines.forEach(id => {
+      if (!existingIds.has(id)) {
+        merged.push({ id, handle: null });
+        existingIds.add(id);
+      }
+    });
+    update("customSources.youtube", merged);
+  };
+  // From Resolve: replaces an existing entry for the same channel so it picks up the name/avatar.
+  const addYoutubeEntry = (entry) => {
+    const rest = config.customSources.youtube.filter(item => (typeof item === "object" ? item.id : item) !== entry.id);
+    update("customSources.youtube", [...rest, entry]);
+  };
+  const remove = (key, i) => {
+    const next = [...config.customSources[key]];
+    next.splice(i, 1);
+    update(`customSources.${key}`, next);
+  };
+
+  return (
+    <div>
+      <h2 id="add-your-own" style={{ ...s.h1, fontSize:24, marginTop:30, marginBottom:6 }}>Add your own</h2>
+      <p style={{ ...s.sub, marginBottom:18 }}>Your own RSS feeds and YouTube channels. They're fetched alongside the built-in sources and land in the Custom Feeds section.</p>
+      <div style={s.card}>
+        <CustomBulkField
+          label="RSS feeds"
+          sub="Paste one or more RSS feed URLs, one per line."
+          items={config.customSources.rss}
+          onAddAll={lines => addAll("rss", lines)}
+          onRemove={i => remove("rss", i)}
+          placeholder={"https://example.com/feed.xml\nhttps://another-site.com/rss"}
+        />
+        <YouTubeResolveField
+          items={config.customSources.youtube}
+          onAddAll={addAllYoutube}
+          onAddEntry={addYoutubeEntry}
+          onRemove={i => remove("youtube", i)}
+        />
+        <div style={{ marginBottom:26, opacity:0.5 }}>
+          <label style={s.label}>X accounts <span style={{ marginLeft:8, fontFamily:F.mono, fontSize:10, letterSpacing:"0.04em", color:C.faint, textTransform:"none", border:`1px solid ${C.border}`, borderRadius:3, padding:"2px 7px" }}>COMING SOON</span></label>
+          <p style={{ fontSize:13, fontFamily:F.body, color:C.muted, marginBottom:9 }}>Reading X accounts isn't available yet. Accounts already listed here are kept but not fetched.</p>
+          <div style={{ marginTop:12, display:"flex", flexWrap:"wrap", gap:7 }}>
+            {config.customSources.xcancel.map((item, i) => (
+              <span key={i} style={s.tag}>
+                {item}
+                <span onClick={() => remove("xcancel", i)} style={{ cursor:"pointer", color:C.red, marginLeft:2, fontWeight:700 }}>✕</span>
+              </span>
+            ))}
+            {!config.customSources.xcancel.length && <span style={{ fontSize:13, fontFamily:F.body, color:C.faint, fontStyle:"italic" }}>None added yet</span>}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── ROOT ──────────────────────────────────────────────────────────────────────
+
+// Sections the Format/Topics toggles can hide. Saved digests always keep them; this only changes what's shown.
+const HIDEABLE = [
+  { id:"everythingElse", re:/Everything Else/i, label:"everything else" },
+  { id:"excluded",       re:/EXCLUDED/i,        label:"excluded" },
+];
+
+// Line counts per hideable section, and the digest with the hidden ones removed.
+function viewDigest(md, hidden) {
+  const out = [], counts = {};
+  let cur = null;
+  for (const line of (md || "").split("\n")) {
+    if (/^##\s/.test(line)) cur = HIDEABLE.find(h => h.re.test(line))?.id || null;
+    if (cur && /^- /.test(line)) counts[cur] = (counts[cur] || 0) + 1;
+    if (cur && !counts[cur]) counts[cur] = 0;
+    if (!cur || !hidden[cur]) out.push(line);
+  }
+  return { text: out.join("\n").replace(/\n+(?:---+\s*)?$/, "\n"), counts };
+}
+
+function OutputTab({ entries, selectedId, onSelect, onRemove, onImport, showDefaults }) {
+  const [show, setShow] = useState(showDefaults);
+  useEffect(() => setShow(showDefaults), [showDefaults.excluded, showDefaults.everythingElse]);
+  const grouped = {};
+  entries.forEach(e => { (grouped[e.date] = grouped[e.date] || []).push(e); });
+  const dates = Object.keys(grouped).sort().reverse();
+  const selected = entries.find(e => e.id === selectedId) || entries[0] || null;
+  const view = selected ? viewDigest(selected.content, { excluded: !show.excluded, everythingElse: !show.everythingElse }) : null;
+
+  const MODE_ICON = {
+    morning:"🌅", nightly:"🌙", weekly:"📅", monthly:"🗓️", manual:"📄",
+    "manual-chatgpt":"💬", "manual-claude":"🔶", "manual-gemini":"✨",
+    "manual-grok":"🤖", "manual-deepseek":"🌊"
+  };
+
+  return (
+    <div>
+      <div style={{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", marginBottom:6 }}>
+        <div>
+          <h1 style={s.h1}>Output</h1>
+          <p style={s.sub}>Digests saved here render like a reading pane — same idea as an Obsidian vault note, organized by date.</p>
+        </div>
+        <button onClick={onImport} style={{ ...s.btn, background:"transparent", color:C.orange, border:`1px solid ${C.orangeLn}`, flexShrink:0 }}>+ Import .md</button>
+      </div>
+
+      {entries.length === 0 ? (
+        <div style={{ ...s.card, textAlign:"center", padding:"48px 24px", color:C.muted, fontFamily:F.body, fontSize:14 }}>
+          No saved digests yet. Hit <span style={{ color:C.orange }}>Run News Digest</span>, wait for a scheduled run, or import a .md file (e.g. from your old <span style={{ color:C.orange }}>.n8n-files</span> folder).
+        </div>
+      ) : (
+        <div style={{ display:"grid", gridTemplateColumns:"230px minmax(0, 1fr)", gap:18, alignItems:"start" }}>
+          {/* entry list */}
+          <div style={{ ...s.card, padding:"10px 0", maxHeight:"70vh", overflowY:"auto" }}>
+            {dates.map(date => (
+              <div key={date} style={{ marginBottom:6 }}>
+                <div style={{ fontFamily:F.mono, fontSize:11, color:C.muted, letterSpacing:"0.05em", padding:"8px 16px 4px" }}>{date}</div>
+                {grouped[date].map(e => {
+                  const active = selected && selected.id === e.id;
+                  return (
+                    <div key={e.id} onClick={() => onSelect(e.id)} style={{
+                      display:"flex", alignItems:"center", justifyContent:"space-between", gap:6, padding:"8px 16px",
+                      cursor:"pointer", background: active ? C.orangeDim : "transparent", borderLeft:`3px solid ${active ? C.orange : "transparent"}` }}>
+                      <span style={{ fontFamily:F.body, fontSize:13, color: active ? C.orange : C.text, textTransform:"capitalize", display:"flex", alignItems:"center", gap:6 }}>
+                        <span>{MODE_ICON[e.mode] || "📄"}</span>{e.mode}
+                      </span>
+                      <span onClick={ev => { ev.stopPropagation(); onRemove(e.id); }} style={{ color:C.faint, fontSize:12, cursor:"pointer" }}>✕</span>
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+
+          {/* reading pane */}
+          <div style={{ ...s.card, minHeight:"60vh", minWidth:0, overflowWrap:"anywhere" }}>
+            {selected ? (
+              <>
+                <style>{MD_STYLE}</style>
+                <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:18, paddingBottom:14, borderBottom:`1px solid ${C.border}` }}>
+                  <span style={{ fontSize:18 }}>{MODE_ICON[selected.mode] || "📄"}</span>
+                  <div>
+                    <div style={{ fontFamily:F.disp, fontSize:16, fontWeight:700, color:C.text, textTransform:"capitalize" }}>{selected.mode} — {selected.date}</div>
+                    <div style={{ fontFamily:F.mono, fontSize:11, color:C.faint }}>saved {new Date(selected.savedAt).toLocaleString()}</div>
+                  </div>
+                  <div style={{ marginLeft:"auto", display:"flex", gap:8, flexWrap:"wrap", justifyContent:"flex-end" }}>
+                    {HIDEABLE.filter(h => view.counts[h.id] !== undefined).map(h => (
+                      <button key={h.id} onClick={() => setShow(v => ({ ...v, [h.id]: !v[h.id] }))} style={{ ...s.btn, fontSize:13, padding:"6px 12px", background:"transparent", color: show[h.id] ? C.orange : C.muted, border:`1px solid ${show[h.id] ? C.orangeLn : C.border}` }}>
+                        {show[h.id] ? "Hide" : "Show"} {h.label} ({view.counts[h.id]})
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="md-reader" dangerouslySetInnerHTML={{ __html: renderMD(view.text) }} />
+              </>
+            ) : (
+              <div style={{ color:C.muted, fontFamily:F.body, fontSize:14, textAlign:"center", padding:"40px 0" }}>Select an entry to view it.</div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DigestConfig() {
+  const [config, setConfig] = useState(deepClone(DEFAULT_CONFIG));
+  const [tab, setTab]       = useState("templates");
+  const [flash, setFlash]   = useState(null);
+  const [layout, setLayout] = useState(() => localStorage.getItem("nr_layout") || "tabs");
+  const [bg, setBg]         = useState(() => localStorage.getItem("nr_bg") || "off");
+  const [n8nStatus, setN8nStatus] = useState("checking"); // server status (name kept to minimise UI churn)
+  const [secrets, setSecrets] = useState({}); // which keys are set in the server's .env (never the values)
+  const [keys, setKeys] = useState({});       // per-key status for the editable .env fields (never secret values)
+  const saveKeys = async (updates) => {
+    const res = await api("/api/keys", { method:"PUT", body: updates });
+    setKeys(res.keys || {});
+    setSecrets(res.secrets || {});
+  };
+  const [runState, setRunState] = useState("idle"); // idle | running | success | error
+
+  const [runError, setRunError] = useState("");
+  const [promptResult, setPromptResult]     = useState(null);
+  const [promptParts, setPromptParts]       = useState(null);
+  const [promptRunState, setPromptRunState] = useState("idle");
+  // Output history lives on the server (GET /api/digests) — survives cache clears, and
+  // includes every scheduled run, not just ones started from this browser.
+  const [outputEntries, setOutputEntries] = useState([]);
+  const [selectedEntryId, setSelectedEntryId] = useState(null);
+
+  const refreshEntries = async () => {
+    try {
+      const { digests } = await api("/api/digests");
+      setOutputEntries(digests.map(d => ({ id: d.id, date: d.date, mode: d.mode, savedAt: d.createdAt, content: d.content })));
+    } catch(e) { /* server offline — badge already shows it */ }
+  };
+
+  // existingId: the run already saved this digest server-side; otherwise POST it (imports).
+  const addEntry = async (date, mode, content, navigate = true, existingId = null) => {
+    let id = existingId;
+    try {
+      if (!id) id = (await api("/api/digests", { method: "POST", body: { date, mode, content } })).id;
+    } catch(e) { window.alert("Couldn't save to Output: " + e.message); return; }
+    await refreshEntries();
+    setSelectedEntryId(id);
+    if (navigate) setTab("output");
+  };
+
+  const removeEntry = async (id) => {
+    try { await api(`/api/digests/${id}`, { method: "DELETE" }); } catch(e) { window.alert("Couldn't delete: " + e.message); return; }
+    if (selectedEntryId === id) setSelectedEntryId(null);
+    refreshEntries();
+  };
+
+  const importMdFile = async () => {
+    try {
+      const [handle] = await window.showOpenFilePicker({ types:[{ description:"Markdown", accept:{"text/markdown":[".md",".txt"]} }] });
+      const file = await handle.getFile();
+      const text = await file.text();
+      const name = file.name.replace(/\.(md|txt)$/i, "");
+      const dateMatch = name.match(/(\d{4}-\d{2}-\d{2})/);
+      const modeMatch = name.match(/(morning|nightly|weekly|monthly)/i);
+      const date = dateMatch ? dateMatch[1] : new Date().toISOString().slice(0,10);
+      const mode = modeMatch ? modeMatch[1].toLowerCase() : "manual";
+      addEntry(date, mode, text);
+    } catch(e) { if (e.name !== "AbortError") window.alert("Couldn't read that file: " + e.message); }
+  };
+
+  // Save first so the server always runs with exactly what's on screen.
+  const persistConfig = async () => {
+    const res = await api("/api/config", { method: "PUT", body: config });
+    setConfig(res.config);
+    setSecrets(res.secrets || {});
+    return res.config;
+  };
+
+  const runNow = async () => {
+    setRunState("running");
+    setRunError("");
+    try {
+      const saved = await persistConfig();
+      // 6 min — Gemini with search grounding can genuinely take 1-2 min, plus fallbacks
+      const payload = await api("/api/run", { method: "POST", timeoutMs: 360000,
+        body: { lookbackWindow: saved.schedule.lookbackWindow || "12h" } });
+      setRunState("success");
+      if (payload && payload.digest) {
+        const date = payload.date || new Date().toISOString().slice(0,10);
+        await addEntry(date, payload.mode || "manual", payload.digest, true, payload.digestId);
+      }
+      setTimeout(() => setRunState("idle"), 4000);
+    } catch(e) {
+      setRunState("error");
+      setRunError(e.status === 409 ? "A run is already in progress — wait for it to finish." : e.message);
+      setTimeout(() => setRunState("idle"), 6000);
+    }
+  };
+
+  const runForPrompt = async () => {
+    setPromptRunState("running");
+    setPromptResult(null);
+    setPromptParts(null);
+    try {
+      const saved = await persistConfig();
+      const payload = await api("/api/prompt", { method: "POST", timeoutMs: 360000,
+        body: { lookbackWindow: saved.schedule.lookbackWindow || "12h" } });
+      if (payload?.digest) {
+        setPromptResult(payload.digest);
+        setPromptParts({
+          howToUse: payload.howToUse || '',
+          systemInstructions: payload.systemInstructions || '',
+          userRequest: payload.userRequest || ''
+        });
+        setPromptRunState("success");
+        const date = payload.date || new Date().toISOString().slice(0,10);
+        await addEntry(date, payload.mode || "manual", payload.digest, false, payload.digestId);
+      } else {
+        setPromptRunState("error");
+      }
+      setTimeout(() => setPromptRunState("idle"), 4000);
+    } catch(e) {
+      setPromptRunState("error");
+      setTimeout(() => setPromptRunState("idle"), 6000);
+    }
+  };
+
+  useEffect(() => { localStorage.setItem("nr_layout", layout); }, [layout]);
+  useEffect(() => { localStorage.setItem("nr_bg", bg); }, [bg]);
+  useEffect(() => {
+    const checkServer = async () => {
+      try { await api("/api/health", { timeoutMs: 2500 }); setN8nStatus("connected"); }
+      catch(e) { setN8nStatus("offline"); }
+    };
+    checkServer();
+    const interval = setInterval(checkServer, 28000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Load the saved config + output history from the server on open.
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await api("/api/config");
+        setConfig(res.config);
+        setSecrets(res.secrets || {});
+        setKeys(res.keys || {});
+        setFlash("loaded");
+        setTimeout(() => setFlash(null), 2500);
+      } catch(e) { setFlash("error"); setTimeout(() => setFlash(null), 2500); }
+      await refreshEntries();
+      // Opened by a scheduled run (Delivery → Open in NetRunner): /?digest=<id>
+      const digestId = Number(new URLSearchParams(location.search).get("digest"));
+      if (digestId) {
+        setSelectedEntryId(digestId);
+        setTab("output");
+        history.replaceState(null, "", location.pathname);
+      }
+    })();
+  }, []);
+
+  // Pick up digests saved by scheduled runs while the window was open.
+  useEffect(() => { if (tab === "output") refreshEntries(); }, [tab]);
+
+  const update = (path, value) => setConfig(prev => setPath(prev, path, value));
+
+  const updateLLMPrimary = (model) => {
+    const all = ["gemini", "claude", "ollama"];
+    const fallback = all.filter(x => x !== model);
+    setConfig(prev => {
+      const next = deepClone(prev);
+      next.llm.primary = model;
+      next.llm.fallbackChain = fallback;
+      return next;
+    });
+  };
+
+  const applyTemplate = (id) => {
+    setConfig(deepClone(id === "blank" ? BLANK_CONFIG : DEFAULT_CONFIG));
+    setTab("topics");
+  };
+
+  const tabIndex = TABS.findIndex(t => t.id === tab);
+  const goNext = () => { if (tabIndex < TABS.length - 1) setTab(TABS[tabIndex + 1].id); };
+  const goPrev = () => { if (tabIndex > 0) setTab(TABS[tabIndex - 1].id); };
+  const isLast = tabIndex === TABS.length - 1;
+
+  const saveConfig = async () => {
+    try {
+      await persistConfig();
+      setFlash("saved");
+    } catch(e) {
+      setFlash("error");
+      window.alert("Config not saved:\n" + e.message);
+    }
+    setTimeout(() => setFlash(null), 2500);
+  };
+
+  // "Load" = discard unsaved edits and reload what the server has.
+  const loadConfig = async () => {
+    try {
+      const res = await api("/api/config");
+      setConfig(res.config);
+      setSecrets(res.secrets || {});
+      setFlash("loaded");
+    } catch(e) { setFlash("error"); }
+    setTimeout(() => setFlash(null), 2500);
+  };
+
+  const enabledTopics  = TOPICS.filter(t => config.topics[t]).length;
+  const enabledSources = Object.entries(config.sources).filter(([src, on]) => on && COUNTABLE_SOURCE_SET.has(src)).length + config.customSources.rss.length + config.customSources.youtube.length;
+
+  const content = (
+    <KeysCtx.Provider value={{ keys, saveKeys }}>
+      {tab === "templates" && <TemplatesTab onApply={applyTemplate} />}
+      {tab === "topics"    && <TopicsTab    config={config} update={update} />}
+      {tab === "sources"   && <React.Fragment><SourcesTab config={config} update={update} /><CustomSourcesTab config={config} update={update} /></React.Fragment>}
+      {tab === "delivery"  && <DeliveryTab  config={config} update={update} secrets={secrets} />}
+      {tab === "schedule"  && <React.Fragment><ScheduleTab config={config} update={update} /><RollupsTab config={config} update={update} /></React.Fragment>}
+      {tab === "llm"       && <LLMTab       config={config} update={update} updateLLMPrimary={updateLLMPrimary} runForPrompt={runForPrompt} promptResult={promptResult} promptParts={promptParts} promptRunState={promptRunState} secrets={secrets} />}
+      {tab === "format"    && <FormatTab    config={config} update={update} />}
+      {tab === "output"    && <OutputTab showDefaults={{ excluded: config.format.showExcluded !== false, everythingElse: config.format.showEverythingElse !== false }} entries={outputEntries} selectedId={selectedEntryId} onSelect={setSelectedEntryId} onRemove={removeEntry} onImport={importMdFile} />}
+    </KeysCtx.Provider>
+  );
+
+  // ── small shared bits ──
+  const bgCycle = () => setBg(BG_PATTERNS[(BG_PATTERNS.indexOf(bg) + 1) % BG_PATTERNS.length]);
+
+  const ControlChips = ({ dark }) => (
+    <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+      <button onClick={bgCycle} title="Cycle background pattern" style={{ fontFamily:F.mono, fontSize:11, color:C.body, background:C.pill, border:`1px solid ${C.border}`, borderRadius:4, padding:"6px 10px", cursor:"pointer", letterSpacing:"0.02em" }}>
+        ▥ {BG_LABEL[bg]}
+      </button>
+      <div style={{ display:"inline-flex", border:`1px solid ${C.border}`, borderRadius:4, overflow:"hidden" }}>
+        {[["tabs","Tabs"],["rail","Sidebar"]].map(([id,lbl]) => (
+          <button key={id} onClick={() => setLayout(id)} style={{ fontFamily:F.mono, fontSize:11, padding:"6px 10px", border:"none", cursor:"pointer",
+            background: layout===id ? C.orange : "transparent", color: layout===id ? "#1a0d07" : C.muted }}>{lbl}</button>
+        ))}
+      </div>
+    </div>
+  );
+
+  const StatPair = () => (
+    <div style={{ display:"flex", gap:10 }}>
+      {[["topics", enabledTopics],["sources", enabledSources]].map(([k,v]) => (
+        <div key={k} style={{ textAlign:"center", minWidth:62, border:`1px solid ${C.border}`, borderRadius:4, padding:"6px 10px", background:C.panel2 }}>
+          <div style={{ fontFamily:F.disp, fontSize:22, fontWeight:700, color:C.orange, lineHeight:1 }}>{v}</div>
+          <div style={{ fontFamily:F.body, fontSize:10, color:C.muted, letterSpacing:"0.08em", marginTop:3, textTransform:"uppercase" }}>{k}</div>
+        </div>
+      ))}
+    </div>
+  );
+
+  // ── BOTTOM ACTION BAR (Back / status / Run / Save / Next) ──
+  const ActionBar = () => (
+    <div style={{ display:"grid", gridTemplateColumns:"auto 1fr auto", alignItems:"center", gap:14, padding:"15px 32px", borderTop:`1px solid ${C.border}`, background:C.bg2, position:"relative", zIndex:2 }}>
+      <div style={{ display:"flex", alignItems:"center", gap:14, minWidth:0 }}>
+        <button onClick={goPrev} disabled={tabIndex===0} style={{ ...s.btn, flexShrink:0, background:"transparent", color: tabIndex===0 ? C.faint : C.body, border:`1px solid ${C.border}` }}>← Back</button>
+        <div style={{ display:"flex", alignItems:"center", gap:8, fontFamily:F.mono, fontSize:11.5, color:C.muted, letterSpacing:"0.03em", overflow:"hidden", whiteSpace:"nowrap" }}>
+          <span style={{ width:7, height:7, borderRadius:"50%", flexShrink:0, background: n8nStatus==="connected" ? C.green : n8nStatus==="offline" ? C.red : C.muted, boxShadow:`0 0 8px ${n8nStatus==="connected" ? C.green : n8nStatus==="offline" ? C.red : C.muted}` }} />
+          <span title={window.location.host} style={{ overflow:"hidden", textOverflow:"ellipsis", fontFamily:F.body, fontSize:12.5 }}>
+            {n8nStatus==="connected" ? "Connected to local server" : n8nStatus==="offline" ? "Server offline — reopen NetRunner" : "Connecting…"}
+          </span>
+        </div>
+        {flash && (
+          <span style={{ fontFamily:F.mono, fontSize:12, color: flash==="error" ? C.red : C.green, letterSpacing:"0.03em", flexShrink:0 }}>
+            {flash==="saved" ? "✓ config saved" : flash==="loaded" ? "✓ config loaded" : "✕ error"}
+          </span>
+        )}
+      </div>
+      <div style={{ display:"flex", flexDirection:"column", alignItems:"center", minWidth:0, position:"relative" }}>
+        <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+          <button onClick={runNow} disabled={runState==="running"} style={{ ...s.btn,
+            display:"flex", alignItems:"center", gap:"clamp(6px,0.8vw,9px)", cursor: runState==="running" ? "default" : "pointer",
+            background:"transparent",
+            color: runState==="success" ? C.green : runState==="error" ? C.red : C.orange,
+            border:`1px solid ${runState==="success" ? C.green : runState==="error" ? C.red : C.orangeLn}`,
+            fontSize:"clamp(12px, 1.1vw, 15px)", padding:"clamp(8px,1vw,10px) clamp(16px,2vw,22px)",
+            whiteSpace:"nowrap", opacity: runState==="running" ? 0.7 : 1 }}>
+            <span style={{ fontSize:"0.85em", lineHeight:1 }}>{runState==="running" ? "◌" : runState==="success" ? "✓" : runState==="error" ? "✕" : "▶"}</span>
+            {runState==="running" ? "Running…" : runState==="success" ? "Digest Sent" : runState==="error" ? "Run Failed" : "Run News Digest"}
+          </button>
+        </div>
+        {runState==="error" && runError && (
+          <div style={{ position:"absolute", top:"100%", marginTop:8, width:340, maxWidth:"60vw", background:C.panel, border:`1px solid ${C.redLn}`, borderRadius:5, padding:"9px 12px", fontFamily:F.mono, fontSize:11, color:C.red, lineHeight:1.5, zIndex:10, boxShadow:"0 8px 24px rgba(0,0,0,.5)" }}>
+            {runError}
+          </div>
+        )}
+      </div>
+      <div style={{ display:"flex", alignItems:"center", gap:10, flexShrink:0 }}>
+        <button onClick={loadConfig} style={{ ...s.btn, background:"transparent", color:C.muted, border:`1px solid ${C.border}` }}>Load</button>
+        <button onClick={saveConfig} style={{ ...s.btn, background:"transparent", color:C.orange, border:`1px solid ${C.orangeLn}` }}>Save</button>
+        <button onClick={isLast ? saveConfig : goNext} style={{ ...s.btn, background:C.orange, color:"#1a0d07", boxShadow:`0 0 18px ${C.orange}44`, clipPath:NOTCH, paddingRight:24 }}>
+          {isLast ? "Finish ✓" : "Next →"}
+        </button>
+      </div>
+    </div>
+  );
+
+  // ── TOP-TAB LAYOUT (Cyberpunk settings style) ──
+  if (layout === "tabs") {
+    return (
+      <div style={{ display:"flex", flexDirection:"column", height:"100vh", fontFamily:F.body, background:C.bg, color:C.text, overflow:"hidden", position:"relative" }}>
+        <GlitchBG pattern={bg} />
+        {/* top bar */}
+        <div style={{ position:"relative", zIndex:2, background:C.bg2, borderBottom:`1px solid ${C.border}` }}>
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"16px 32px 14px", gap:20 }}>
+            <Logo />
+            <div style={{ display:"flex", alignItems:"center", gap:16 }}>
+              <StatPair />
+              <N8nBadge status={n8nStatus} />
+              <ControlChips />
+            </div>
+          </div>
+          {/* horizontal tabs */}
+          <div style={{ display:"flex", alignItems:"center", gap:4, padding:"0 26px", flexWrap:"wrap" }}>
+            {TABS.map((t, i) => {
+              const active = tab===t.id;
+              return (
+                <button key={t.id} onClick={() => setTab(t.id)} style={{ position:"relative", display:"flex", alignItems:"center", gap:8, padding:"12px 16px 14px", border:"none", background:"transparent", cursor:"pointer",
+                  fontFamily:F.disp, fontSize:17, fontWeight:700, letterSpacing:"0.05em", textTransform:"uppercase",
+                  color: active ? C.cyan : C.body, transition:"color .12s" }}
+                  onMouseEnter={e => { if(!active) e.currentTarget.style.color = C.orange; }}
+                  onMouseLeave={e => { if(!active) e.currentTarget.style.color = C.body; }}>
+                  <span style={{ fontFamily:F.mono, fontSize:10, color: active ? C.cyan : C.faint, fontWeight:400 }}>{String(i+1).padStart(2,"0")}</span>
+                  {t.label}
+                  {active && <span style={{ position:"absolute", left:12, right:12, bottom:0, height:2, background:C.cyan, boxShadow:`0 0 10px ${C.cyan}` }} />}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        {/* content */}
+        <div style={{ flex:1, overflowY:"auto", position:"relative", zIndex:1 }}>
+          <div style={{ maxWidth:920, margin:"0 auto", padding:"34px 32px 48px" }}>{content}</div>
+        </div>
+        <ActionBar />
+      </div>
+    );
+  }
+
+  // ── LEFT-RAIL LAYOUT ──
+  return (
+    <div style={{ display:"flex", height:"100vh", fontFamily:F.body, background:C.bg, color:C.text, overflow:"hidden", position:"relative" }}>
+      <GlitchBG pattern={bg} />
+      {/* sidebar */}
+      <div style={{ width:250, background:C.bg2, borderRight:`1px solid ${C.border}`, display:"flex", flexDirection:"column", position:"relative", zIndex:2 }}>
+        <div style={{ padding:"20px 20px 16px", borderBottom:`1px solid ${C.border}` }}>
+          <Logo />
+          <div style={{ marginTop:14 }}><N8nBadge status={n8nStatus} /></div>
+        </div>
+        <div style={{ padding:"14px 16px", borderBottom:`1px solid ${C.border}` }}><StatPair /></div>
+        <nav style={{ flex:1, overflowY:"auto", padding:"10px 0" }}>
+          {TABS.map((t, i) => {
+            const active = tab===t.id;
+            return (
+              <button key={t.id} onClick={() => setTab(t.id)} style={{ display:"flex", alignItems:"center", gap:11, width:"100%", textAlign:"left", padding:"11px 20px 11px 17px", border:"none",
+                background: active ? C.cyanDim : "transparent", cursor:"pointer", fontFamily:F.disp, fontSize:17, fontWeight:700, letterSpacing:"0.04em", textTransform:"uppercase",
+                color: active ? C.cyan : C.body, borderLeft:`3px solid ${active ? C.cyan : "transparent"}`, transition:"all .14s" }}
+                onMouseEnter={e => { if(!active) e.currentTarget.style.color = C.orange; }}
+                onMouseLeave={e => { if(!active) e.currentTarget.style.color = C.body; }}>
+                <span style={{ fontFamily:F.mono, fontSize:10, color: active ? C.cyan : C.faint, fontWeight:400 }}>{String(i+1).padStart(2,"0")}</span>
+                {t.label}
+              </button>
+            );
+          })}
+        </nav>
+        <div style={{ padding:"14px 16px", borderTop:`1px solid ${C.border}` }}><ControlChips /></div>
+      </div>
+      {/* main */}
+      <div style={{ flex:1, display:"flex", flexDirection:"column", position:"relative", zIndex:1, minWidth:0 }}>
+        <div style={{ flex:1, overflowY:"auto" }}>
+          <div style={{ maxWidth:880, margin:"0 auto", padding:"34px 36px 48px" }}>{content}</div>
+        </div>
+        <ActionBar />
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(DigestConfig));
+</script>
+<script>
+window.addEventListener('load', async function() {
+  var src = document.getElementById('nr-src').textContent;
+  try {
+    var res = await fetch('/api/catalog');
+    if (!res.ok) throw new Error('GET /api/catalog → HTTP ' + res.status);
+    window.NR_CATALOG = await res.json();
+  } catch(e) {
+    document.getElementById('root').innerHTML =
+      '<pre style="color:#ff6d3a;background:#0c0809;padding:30px;font:13px monospace;white-space:pre-wrap;margin:0;min-height:100vh">' +
+      ('Could not reach the NetRunner server.\nStart it with `npm start` and reload this page.\n\n' + e.message).replace(/</g,'&lt;') + '</pre>';
+    return;
+  }
+  try {
+    var compiled = Babel.transform(src, {
+      filename: 'app.jsx',
+      presets: [['react', { runtime: 'classic' }]]
+    }).code;
+    var script = document.createElement('script');
+    script.textContent = compiled;
+    document.body.appendChild(script);
+  } catch(e) {
+    document.getElementById('root').innerHTML =
+      '<pre style="color:#ff6d3a;background:#0c0809;padding:30px;font:13px monospace;white-space:pre-wrap;margin:0;min-height:100vh">' +
+      ('Compile error:\n' + (e.stack || e.message)).replace(/</g,'&lt;') + '</pre>';
+  }
+});
+</script>
+</body>
+</html>

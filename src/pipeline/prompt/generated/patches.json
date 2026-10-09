@@ -1,0 +1,277 @@
+[
+  {
+    "id": "topics-always-include-payload",
+    "node": "Build LLM Payload",
+    "why": "Leaks & Rumors was forced into every digest even when its topic was off."
+  },
+  {
+    "id": "topics-format-always-payload",
+    "node": "Build LLM Payload",
+    "why": "The FORMAT rules told the model Blindspot and Leaks & Rumors \"always appear\", overriding the toggles."
+  },
+  {
+    "id": "topics-search-list-payload",
+    "node": "Build LLM Payload",
+    "why": "The hardcoded \"Also search for\" list (all topics) is replaced by searchTasks() in both the morning and nightly request."
+  },
+  {
+    "id": "topics-search-fn-payload",
+    "node": "Build LLM Payload",
+    "why": "Defines searchTasks(): the \"Also search for\" list built from the enabled topics only."
+  },
+  {
+    "id": "topics-search-placement-payload",
+    "node": "Build LLM Payload",
+    "why": "Search results for disabled topics were landing in Everything Else."
+  },
+  {
+    "id": "topics-comics-rules-payload",
+    "node": "Build LLM Payload",
+    "why": "The Comics rules (\"always show all 8 publishers\") were sent even with Comics off."
+  },
+  {
+    "id": "filler-splice-payload",
+    "node": "Build LLM Payload",
+    "why": "update.py spliced FILLER REJECTION into the middle of the \"NEVER invent\" sentence (and left a double period). Restored the sentence and made FILLER its own bullet."
+  },
+  {
+    "id": "filler-reason-payload",
+    "node": "Build LLM Payload",
+    "why": "The ledger allowed only 4 reasons while FILLER REJECTION requires reason \"filler\" (the model already emitted it). Added filler as the 5th valid reason."
+  },
+  {
+    "id": "summary-length-def-chatgpt",
+    "node": "digest_export_(ChatGPT)",
+    "why": "Copy-paste exporters ignored format.summaryLength; read it from the config (same three options as Build LLM Payload)."
+  },
+  {
+    "id": "summary-length-rule-chatgpt",
+    "node": "digest_export_(ChatGPT)",
+    "why": "Use the configured summary length instead of the hardcoded \"2–3 sentences\"."
+  },
+  {
+    "id": "topics-emoji-chatgpt",
+    "node": "digest_export_(ChatGPT)",
+    "why": "World News, Business & Finance and Blindspot become normal toggleable sections that follow the section order."
+  },
+  {
+    "id": "topics-rules-map-chatgpt",
+    "node": "digest_export_(ChatGPT)",
+    "why": "Section rules for the newly toggleable sections (same wording as the old hardcoded lines)."
+  },
+  {
+    "id": "topics-bf-hardcoded-chatgpt",
+    "node": "digest_export_(ChatGPT)",
+    "why": "Business & Finance was always included; it now comes from the toggles."
+  },
+  {
+    "id": "topics-blindspot-hardcoded-chatgpt",
+    "node": "digest_export_(ChatGPT)",
+    "why": "Blindspot Analysis was always included; it now comes from the toggles."
+  },
+  {
+    "id": "topics-leaks-hardcoded-chatgpt",
+    "node": "digest_export_(ChatGPT)",
+    "why": "Leaks & Rumors was always included (and listed twice); it now comes from the toggles, once."
+  },
+  {
+    "id": "topics-headers-bf-chatgpt",
+    "node": "digest_export_(ChatGPT)",
+    "why": "Hardcoded Business & Finance header removed (toggle-driven now)."
+  },
+  {
+    "id": "topics-headers-blindspot-leaks-chatgpt",
+    "node": "digest_export_(ChatGPT)",
+    "why": "Hardcoded Blindspot and Leaks & Rumors headers removed: fixes the duplicate Leaks header and makes both toggleable."
+  },
+  {
+    "id": "summary-length-def-claude",
+    "node": "digest_export_(Claude)",
+    "why": "Copy-paste exporters ignored format.summaryLength; read it from the config (same three options as Build LLM Payload)."
+  },
+  {
+    "id": "summary-length-rule-claude",
+    "node": "digest_export_(Claude)",
+    "why": "Use the configured summary length instead of the hardcoded \"2–3 sentences\"."
+  },
+  {
+    "id": "topics-emoji-claude",
+    "node": "digest_export_(Claude)",
+    "why": "World News, Business & Finance and Blindspot become normal toggleable sections that follow the section order."
+  },
+  {
+    "id": "topics-rules-map-claude",
+    "node": "digest_export_(Claude)",
+    "why": "Section rules for the newly toggleable sections (same wording as the old hardcoded lines)."
+  },
+  {
+    "id": "topics-bf-hardcoded-claude",
+    "node": "digest_export_(Claude)",
+    "why": "Business & Finance was always included; it now comes from the toggles."
+  },
+  {
+    "id": "topics-blindspot-hardcoded-claude",
+    "node": "digest_export_(Claude)",
+    "why": "Blindspot Analysis was always included; it now comes from the toggles."
+  },
+  {
+    "id": "topics-leaks-hardcoded-claude",
+    "node": "digest_export_(Claude)",
+    "why": "Leaks & Rumors was always included (and listed twice); it now comes from the toggles, once."
+  },
+  {
+    "id": "topics-headers-bf-claude",
+    "node": "digest_export_(Claude)",
+    "why": "Hardcoded Business & Finance header removed (toggle-driven now)."
+  },
+  {
+    "id": "topics-headers-blindspot-leaks-claude",
+    "node": "digest_export_(Claude)",
+    "why": "Hardcoded Blindspot and Leaks & Rumors headers removed: fixes the duplicate Leaks header and makes both toggleable."
+  },
+  {
+    "id": "summary-length-def-grok",
+    "node": "digest_export_(grok)",
+    "why": "Copy-paste exporters ignored format.summaryLength; read it from the config (same three options as Build LLM Payload)."
+  },
+  {
+    "id": "summary-length-rule-grok",
+    "node": "digest_export_(grok)",
+    "why": "Use the configured summary length instead of the hardcoded \"2–3 sentences\"."
+  },
+  {
+    "id": "topics-emoji-grok",
+    "node": "digest_export_(grok)",
+    "why": "World News, Business & Finance and Blindspot become normal toggleable sections that follow the section order."
+  },
+  {
+    "id": "topics-rules-map-grok",
+    "node": "digest_export_(grok)",
+    "why": "Section rules for the newly toggleable sections (same wording as the old hardcoded lines)."
+  },
+  {
+    "id": "topics-bf-hardcoded-grok",
+    "node": "digest_export_(grok)",
+    "why": "Business & Finance was always included; it now comes from the toggles."
+  },
+  {
+    "id": "topics-blindspot-hardcoded-grok",
+    "node": "digest_export_(grok)",
+    "why": "Blindspot Analysis was always included; it now comes from the toggles."
+  },
+  {
+    "id": "topics-leaks-hardcoded-grok",
+    "node": "digest_export_(grok)",
+    "why": "Leaks & Rumors was always included (and listed twice); it now comes from the toggles, once."
+  },
+  {
+    "id": "topics-headers-bf-grok",
+    "node": "digest_export_(grok)",
+    "why": "Hardcoded Business & Finance header removed (toggle-driven now)."
+  },
+  {
+    "id": "topics-headers-blindspot-leaks-grok",
+    "node": "digest_export_(grok)",
+    "why": "Hardcoded Blindspot and Leaks & Rumors headers removed: fixes the duplicate Leaks header and makes both toggleable."
+  },
+  {
+    "id": "summary-length-def-deepseek",
+    "node": "Digest_export_[DeepSeek]",
+    "why": "Copy-paste exporters ignored format.summaryLength; read it from the config (same three options as Build LLM Payload)."
+  },
+  {
+    "id": "summary-length-rule-deepseek",
+    "node": "Digest_export_[DeepSeek]",
+    "why": "Use the configured summary length instead of the hardcoded \"2–3 sentences\"."
+  },
+  {
+    "id": "topics-emoji-deepseek",
+    "node": "Digest_export_[DeepSeek]",
+    "why": "World News, Business & Finance and Blindspot become normal toggleable sections that follow the section order."
+  },
+  {
+    "id": "topics-rules-map-deepseek",
+    "node": "Digest_export_[DeepSeek]",
+    "why": "Section rules for the newly toggleable sections (same wording as the old hardcoded lines)."
+  },
+  {
+    "id": "topics-bf-hardcoded-deepseek",
+    "node": "Digest_export_[DeepSeek]",
+    "why": "Business & Finance was always included; it now comes from the toggles."
+  },
+  {
+    "id": "topics-blindspot-hardcoded-deepseek",
+    "node": "Digest_export_[DeepSeek]",
+    "why": "Blindspot Analysis was always included; it now comes from the toggles."
+  },
+  {
+    "id": "topics-leaks-hardcoded-deepseek",
+    "node": "Digest_export_[DeepSeek]",
+    "why": "Leaks & Rumors was always included (and listed twice); it now comes from the toggles, once."
+  },
+  {
+    "id": "topics-headers-bf-deepseek",
+    "node": "Digest_export_[DeepSeek]",
+    "why": "Hardcoded Business & Finance header removed (toggle-driven now)."
+  },
+  {
+    "id": "topics-headers-blindspot-leaks-deepseek",
+    "node": "Digest_export_[DeepSeek]",
+    "why": "Hardcoded Blindspot and Leaks & Rumors headers removed: fixes the duplicate Leaks header and makes both toggleable."
+  },
+  {
+    "id": "literal-template-gemini-bf",
+    "node": "digest_export_(Gemini)",
+    "why": "Escaped \\${…} sent the literal text \"${mode === 'nightly' ? …}\" to the model instead of the resolved phrase."
+  },
+  {
+    "id": "literal-template-gemini-uspol",
+    "node": "digest_export_(Gemini)",
+    "why": "Same escaped \\${…} bug in the US Politics rule."
+  },
+  {
+    "id": "filler-splice-gemini",
+    "node": "digest_export_(Gemini)",
+    "why": "update.py spliced FILLER REJECTION into the middle of the \"NEVER use training data\" sentence. Restored the sentence and made FILLER its own bullet."
+  },
+  {
+    "id": "filler-reason-gemini",
+    "node": "digest_export_(Gemini)",
+    "why": "Added filler as a valid EXCLUDED reason to match FILLER REJECTION."
+  },
+  {
+    "id": "summary-length-def-gemini",
+    "node": "digest_export_(Gemini)",
+    "why": "Copy-paste exporters ignored format.summaryLength; read it from the config (same three options as Build LLM Payload)."
+  },
+  {
+    "id": "summary-length-rule-gemini",
+    "node": "digest_export_(Gemini)",
+    "why": "Use the configured summary length instead of the hardcoded \"2–3 sentences\"."
+  },
+  {
+    "id": "topics-emoji-gemini",
+    "node": "digest_export_(Gemini)",
+    "why": "World News, Business & Finance and Blindspot become normal toggleable sections that follow the section order."
+  },
+  {
+    "id": "topics-rules-map-gemini",
+    "node": "digest_export_(Gemini)",
+    "why": "Section rules for the newly toggleable sections (same wording as the old hardcoded lines)."
+  },
+  {
+    "id": "topics-leaks-hardcoded-gemini",
+    "node": "digest_export_(Gemini)",
+    "why": "Leaks & Rumors was always included (and listed twice); it now comes from the toggles, once."
+  },
+  {
+    "id": "topics-headers-bf-gemini",
+    "node": "digest_export_(Gemini)",
+    "why": "Hardcoded Business & Finance header removed (toggle-driven now)."
+  },
+  {
+    "id": "topics-headers-blindspot-leaks-gemini",
+    "node": "digest_export_(Gemini)",
+    "why": "Hardcoded Blindspot and Leaks & Rumors headers removed: fixes the duplicate Leaks header and makes both toggleable."
+  }
+]

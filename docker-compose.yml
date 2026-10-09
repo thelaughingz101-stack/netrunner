@@ -1,0 +1,17 @@
+services:
+  netrunner:
+    build: .
+    image: netrunner:latest
+    container_name: netrunner
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      HOST: 0.0.0.0
+      DATA_DIR: /data
+      # Ollama on the Docker host (Docker Desktop). On Linux add the extra_hosts line below.
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
+    # extra_hosts: ["host.docker.internal:host-gateway"]
+    ports:
+      - "8787:8787"
+    volumes:
+      - ./data:/data

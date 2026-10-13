@@ -29,6 +29,14 @@ export class AllTiersFailedError extends Error {
 
 export const tierOrder = (config: Config): Tier[] => [...new Set([config.llm.primary, ...config.llm.fallbackChain])] as Tier[];
 
+type TimeoutEnv = Pick<ReturnType<typeof env>, 'LLM_TIMEOUT_MS' | 'LLM_TIMEOUT_PER_SOURCE_MS' | 'LLM_TIMEOUT_MAX_MS'>;
+
+/** Per-call timeout for a digest built from `sources` feeds (custom ones included). The digest's length —
+ *  and so the model's writing time — grows with the source count (~1.4s each measured on Gemini Flash). */
+export function llmTimeoutFor(sources: number, e: TimeoutEnv = env()): number {
+  return Math.min(e.LLM_TIMEOUT_MAX_MS, Math.max(e.LLM_TIMEOUT_MS, sources * e.LLM_TIMEOUT_PER_SOURCE_MS));
+}
+
 const truncationBanner = (tier: Tier, text: string) =>
   `⚠️ ${tier === 'gemini' ? 'Gemini' : tier === 'claude' ? 'Claude' : 'Ollama'} response was truncated (hit MAX_TOKENS) before finishing. Raw partial output below:\n\n${text}`;
 
@@ -57,8 +65,9 @@ export async function generate(req: LLMRequest, config: Config, log: Logger, opt
     }
     for (let attempt = 1; attempt <= tries; attempt++) {
       const t0 = Date.now();
+      const signal = AbortSignal.timeout(timeoutMs);
       try {
-        const out = await p.call(req, AbortSignal.timeout(timeoutMs));
+        const out = await p.call(req, signal);
         const rec: AttemptLog = { tier, attempt, ok: true, ms: Date.now() - t0, finishReason: out.finishReason };
         attempts.push(rec);
         if (out.truncated) {
@@ -70,7 +79,11 @@ export async function generate(req: LLMRequest, config: Config, log: Logger, opt
         log.info({ ...rec, kind: req.kind, model: out.model, chars: out.text.length }, `LLM answered by ${tier}`);
         return { tier, model: out.model, text: out.text, finishReason: out.finishReason, truncated: false, attempts };
       } catch (err) {
-        const le = err instanceof LLMError ? err
+        // Providers wrap the abort in their own message ("network error: …aborted"), so check the signal.
+        // A timeout isn't retried: the identical request would just take as long again (×LLM_MAX_TRIES).
+        const le = signal.aborted
+          ? new LLMError(`timed out after ${Math.round(timeoutMs / 1000)}s — the model was still writing; raise LLM_TIMEOUT_MS or LLM_TIMEOUT_PER_SOURCE_MS in .env`, false)
+          : err instanceof LLMError ? err
           : new LLMError((err as Error).name === 'TimeoutError' ? `timed out after ${timeoutMs}ms` : (err as Error).message, true);
         attempts.push({ tier, attempt, ok: false, ms: Date.now() - t0, status: le.status, error: le.message });
         const more = le.retryable && attempt < tries;

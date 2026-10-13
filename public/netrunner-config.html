@@ -1563,8 +1563,9 @@ function DigestConfig() {
     setRunError("");
     try {
       const saved = await persistConfig();
-      // 6 min — Gemini with search grounding can genuinely take 1-2 min, plus fallbacks
-      const payload = await api("/api/run", { method: "POST", timeoutMs: 360000,
+      // A full digest takes Gemini ~4-5 min, plus coverage recovery and fallback tiers; the server
+      // enforces its own per-call timeout, so the page just waits for the real answer.
+      const payload = await api("/api/run", { method: "POST", timeoutMs: 60 * 60000,
         body: { lookbackWindow: saved.schedule.lookbackWindow || "12h" } });
       setRunState("success");
       if (payload && payload.digest) {
@@ -1574,10 +1575,11 @@ function DigestConfig() {
       setTimeout(() => setRunState("idle"), 4000);
     } catch(e) {
       setRunState("error");
-      setRunError(e.status === 409 ? "A run is already in progress — wait for it to finish." : e.message);
-      setTimeout(() => setRunState("idle"), 6000);
+      // Stays up until dismissed — a 6-second flash was easy to miss.
+      setRunError(e.status === 409 ? "A run is already in progress (maybe a scheduled one) — wait for it to finish." : e.message);
     }
   };
+  const dismissRunError = () => { setRunState("idle"); setRunError(""); };
 
   const runForPrompt = async () => {
     setPromptRunState("running");
@@ -1631,6 +1633,16 @@ function DigestConfig() {
         setTimeout(() => setFlash(null), 2500);
       } catch(e) { setFlash("error"); setTimeout(() => setFlash(null), 2500); }
       await refreshEntries();
+      // Scheduled runs happen with no window open — if the latest one failed, say so (and why).
+      try {
+        const { runs } = await api("/api/runs");
+        const last = (runs || []).find(r => r.status === "ok" || r.status === "error");
+        if (last && last.status === "error" && last.error) {
+          const when = new Date(last.finishedAt || last.startedAt).toLocaleString();
+          setRunState("error");
+          setRunError(`Last ${last.trigger === "schedule" ? "scheduled " : ""}${last.mode || ""} run (${when}) failed:\n${last.error}`);
+        }
+      } catch(e) {}
       // Opened by a scheduled run (Delivery → Open in NetRunner): /?digest=<id>
       const digestId = Number(new URLSearchParams(location.search).get("digest"));
       if (digestId) {
@@ -1764,7 +1776,8 @@ function DigestConfig() {
           </button>
         </div>
         {runState==="error" && runError && (
-          <div style={{ position:"absolute", top:"100%", marginTop:8, width:340, maxWidth:"60vw", background:C.panel, border:`1px solid ${C.redLn}`, borderRadius:5, padding:"9px 12px", fontFamily:F.mono, fontSize:11, color:C.red, lineHeight:1.5, zIndex:10, boxShadow:"0 8px 24px rgba(0,0,0,.5)" }}>
+          <div role="alert" style={{ position:"absolute", top:"100%", marginTop:8, width:420, maxWidth:"80vw", maxHeight:"40vh", overflowY:"auto", background:C.panel, border:`1px solid ${C.redLn}`, borderRadius:5, padding:"9px 30px 9px 12px", fontFamily:F.mono, fontSize:11, color:C.red, lineHeight:1.5, zIndex:10, boxShadow:"0 8px 24px rgba(0,0,0,.5)", whiteSpace:"pre-wrap", overflowWrap:"anywhere", userSelect:"text" }}>
+            <button onClick={dismissRunError} title="Dismiss" aria-label="Dismiss" style={{ position:"absolute", top:4, right:6, background:"transparent", border:"none", color:C.red, cursor:"pointer", fontSize:14, lineHeight:1 }}>×</button>
             {runError}
           </div>
         )}

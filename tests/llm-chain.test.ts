@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { setEnvForTests } from '../src/env.js';
 import { normalizeConfig } from '../src/config/schema.js';
 import { log } from '../src/logger.js';
-import { AllTiersFailedError, generate, tierOrder } from '../src/pipeline/llm/engine.js';
+import { AllTiersFailedError, generate, llmTimeoutFor, tierOrder } from '../src/pipeline/llm/engine.js';
 import { LLMError, type LLMRequest, type Provider, type ProviderOutput, type Tier } from '../src/pipeline/llm/types.js';
 import { geminiProvider } from '../src/pipeline/llm/gemini.js';
 import { claudeProvider } from '../src/pipeline/llm/claude.js';
@@ -54,6 +54,25 @@ describe('LLM fallback chain', () => {
     expect(r.tier).toBe('gemini');
     expect(g.calls).toHaveLength(3);
     expect(r.attempts.map(a => a.ok)).toEqual([false, false, true]);
+  });
+
+  it('reports a timeout as a timeout and moves to the next tier instead of re-running the same slow call', async () => {
+    const calls: number[] = [];
+    // Like gemini.ts: the provider wraps the abort in its own error message.
+    const slow: Provider = {
+      tier: 'gemini',
+      unavailable: () => null,
+      call: (_req, signal) => new Promise((_, reject) => {
+        calls.push(1);
+        signal.addEventListener('abort', () => reject(new LLMError('gemini network error: The operation was aborted due to timeout', true)));
+      }),
+    };
+    const c = scripted('claude', [ok('from claude')]);
+    const r = await generate(req, cfg('gemini', ['claude']), log, { ...noSleep, timeoutMs: 20, providers: { gemini: slow, claude: c.p } });
+    expect(r.tier).toBe('claude');
+    expect(calls).toHaveLength(1);
+    expect(r.attempts[0]).toMatchObject({ tier: 'gemini', ok: false, error: expect.stringMatching(/timed out after 0\.?\d* ?s|timed out after/) });
+    expect(r.attempts[0].error).toContain('LLM_TIMEOUT_MS');
   });
 
   it('falls straight to the next tier on a non-retryable error', async () => {
@@ -165,5 +184,23 @@ describe('providers', () => {
     expect(sent.prompt).toContain('You have NO internet access');
     expect(sent.prompt.endsWith('RSS ITEMS:\nUSER')).toBe(true);
     expect(out.text).toBe('⚠️ FALLBACK DIGEST (Gemini unavailable — RSS only)\n\n## Gaming');
+  });
+});
+
+describe('LLM timeout scales with the source count', () => {
+  const e = { LLM_TIMEOUT_MS: 600_000, LLM_TIMEOUT_PER_SOURCE_MS: 4_000, LLM_TIMEOUT_MAX_MS: 1_800_000 };
+
+  it('never goes below LLM_TIMEOUT_MS', () => {
+    expect(llmTimeoutFor(0, e)).toBe(600_000);
+    expect(llmTimeoutFor(50, e)).toBe(600_000);
+  });
+
+  it('grows per source (custom feeds count too) above the floor', () => {
+    expect(llmTimeoutFor(162, e)).toBe(648_000);
+    expect(llmTimeoutFor(300, e)).toBe(1_200_000);
+  });
+
+  it('is capped at LLM_TIMEOUT_MAX_MS', () => {
+    expect(llmTimeoutFor(5_000, e)).toBe(1_800_000);
   });
 });

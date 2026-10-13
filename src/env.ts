@@ -24,7 +24,10 @@ const EnvSchema = z.object({
   OLLAMA_URL: z.string().default('http://localhost:11434'),
   OLLAMA_MODEL: z.string().default('llama3:latest'),
 
-  LLM_TIMEOUT_MS: int(240_000),
+  // Digest calls get max(LLM_TIMEOUT_MS, sources × LLM_TIMEOUT_PER_SOURCE_MS), capped at LLM_TIMEOUT_MAX_MS.
+  LLM_TIMEOUT_MS: int(600_000),
+  LLM_TIMEOUT_PER_SOURCE_MS: int(4_000),
+  LLM_TIMEOUT_MAX_MS: int(1_800_000),
   LLM_MAX_TRIES: int(5),
   LLM_RETRY_DELAY_MS: int(5_000),
   FEED_TIMEOUT_MS: int(20_000),

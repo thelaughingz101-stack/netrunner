@@ -12,7 +12,7 @@ import { deliverAll, type DeliveryResult } from './delivery/registry.js';
 import type { DeliveryTarget } from './delivery/types.js';
 import { ingest } from './ingest/index.js';
 import type { FetchText } from './ingest/fetchFeeds.js';
-import { AllTiersFailedError, generate, type EngineOptions } from './llm/engine.js';
+import { AllTiersFailedError, generate, llmTimeoutFor, type EngineOptions } from './llm/engine.js';
 import { resolveMode, type ModeRequest } from './mode.js';
 import { buildLlmPayload, buildManualPrompt, type ManualOutput } from './prompt/index.js';
 import { monthlyPrompt, weeklyPrompt } from './rollups.js';
@@ -135,8 +135,10 @@ async function digestRun(mode: Mode, lookbackWindow: string, opts: RunOptions): 
   const ctx = createRun({ config, mode, lookbackWindow, dryRun: !!opts.dryRun, trigger: opts.trigger, kind: 'digest', now: opts.now });
   return guarded(ctx, async () => {
     ctx.log.info({ trigger: opts.trigger, lookbackWindow }, 'digest run started');
-    const { items: raw } = await ingest(ctx, { fetchText: opts.fetchText, tries: opts.feedTries });
+    const { items: raw, feedResults } = await ingest(ctx, { fetchText: opts.fetchText, tries: opts.feedTries });
     const items = assignIds(raw);
+    const engine: EngineOptions = { timeoutMs: llmTimeoutFor(feedResults.length), ...opts.engine };
+    ctx.log.info({ sources: feedResults.length, llmTimeoutMs: engine.timeoutMs }, 'LLM timeout set from source count');
 
     // Nightly continuity: today's morning digest from the DB (n8n's file lookup had broken).
     const morningDigest = mode === 'nightly' ? (findDigest(ctx.today, 'morning')?.content ?? '') : '';
@@ -144,11 +146,11 @@ async function digestRun(mode: Mode, lookbackWindow: string, opts: RunOptions): 
     ctx.stats.continuity = { morningDigestFound: !!morningDigest, developingStories: developing.length };
 
     const prompt = withIdRule(buildLlmPayload({ mode, items, morningDigest }, config, developing));
-    const first = await generate({ kind: 'digest', prompt, idRule: ID_RULE }, config, ctx.log, opts.engine);
+    const first = await generate({ kind: 'digest', prompt, idRule: ID_RULE }, config, ctx.log, engine);
     ctx.stats.llm = { tier: first.tier, model: first.model, finishReason: first.finishReason, truncated: first.truncated, attempts: first.attempts };
 
     const coverage = items.length
-      ? await ensureCoverage(ctx, items, prompt, first, opts.engine)
+      ? await ensureCoverage(ctx, items, prompt, first, engine)
       : { digest: first.text, placements: new Map(), forced: 0, rounds: [], extraTiers: [] };
     const digest = stripTags(coverage.digest);
 

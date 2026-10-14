@@ -13,7 +13,7 @@ const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 export const discord = (fetchImpl: typeof fetch = fetch): DeliveryTarget => ({
   name: 'discord',
   enabled: c => c.delivery.discord === true,
-  misconfigured: () => (env().DISCORD_WEBHOOK_URL ? null : 'DISCORD_WEBHOOK_URL not set in .env'),
+  misconfigured: () => (env().DISCORD_WEBHOOK_URL ? null : 'no Discord webhook URL saved (Delivery tab → Discord)'),
   render(input, ctx) {
     const chunks = discordChunks(input.digest, input.mode, input.lookbackWindow, ctx.now, ctx.config.schedule.timezone);
     return {
@@ -46,7 +46,7 @@ export const email = (transportFactory = (opts: object) => nodemailer.createTran
   enabled: c => c.delivery.email === true,
   misconfigured(c) {
     const e = env();
-    if (!(e.SMTP_HOST && e.SMTP_USER && e.SMTP_PASS)) return 'SMTP_HOST / SMTP_USER / SMTP_PASS not set in .env';
+    if (!(e.SMTP_HOST && e.SMTP_USER && e.SMTP_PASS)) return 'email sending isn\'t set up: SMTP host, user and password are needed (Delivery tab → Email)';
     if (!(c.delivery.emailAddress || e.EMAIL_TO)) return 'no recipient (Config UI email address or EMAIL_TO)';
     return null;
   },

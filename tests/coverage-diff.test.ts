@@ -86,6 +86,34 @@ describe('merge + force-place + strip', () => {
   });
 });
 
+describe('one story from several outlets = one bullet with every tag', () => {
+  const merged = `## 🎮 Gaming
+- [**Cyberpunk 2077 is getting a live-action movie**](https://x.dev/1) — Paramount. *(Rock Paper Shotgun, VGC)* [#N001][#N002]
+## 🗒️ EXCLUDED
+EXCLUDED: none`;
+
+  it('counts every tag on a merged bullet as placed in that section', () => {
+    const r = diffCoverage(merged, ['N001', 'N002']);
+    expect(r.missing).toEqual([]);
+    expect([...r.found.values()]).toEqual(['section', 'section']);
+  });
+
+  it('strips all the tags for delivery', () => {
+    expect(stripTags(merged)).toContain('*(Rock Paper Shotgun, VGC)*\n');
+  });
+
+  it('the id rule tells the model to carry every tag instead of repeating the story', () => {
+    expect(ID_RULE).not.toContain('One tag per bullet.');
+    expect(ID_RULE).toContain('[#N017][#N042]');
+  });
+
+  it('the AI Writer prompt defines a duplicate as the same story, whoever reported it', () => {
+    const p = buildLlmPayload({ mode: 'morning', items: mk(1), morningDigest: '' }, normalizeConfig({}), []);
+    expect(p.system).not.toContain('Two different outlets covering the same story are NOT duplicates');
+    expect(p.system).toContain('naming every outlet that covered it');
+  });
+});
+
 describe('untagged duplicates (regression from the first live Gemini run)', () => {
   const items = assignIds([
     { mode: 'nightly', source: 'CBR', category: 'TV & Movies', title: "After 36 Years, Tim Burton’s 105-Minute Gothic Fairytale Returns as Halloween Streaming Hit",

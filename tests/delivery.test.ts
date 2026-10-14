@@ -91,7 +91,7 @@ describe('delivery gates', () => {
     freshState({ DISCORD_WEBHOOK_URL: undefined, DATA_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'nr-data-')) });
     const ctx = run({ discord: true, textFile: true });
     const res = await deliverAll({ digest: 'x', mode: 'morning', lookbackWindow: '12h' }, ctx, f.targets);
-    expect(res.find(r => r.target === 'discord')).toMatchObject({ status: 'error', detail: expect.stringMatching(/DISCORD_WEBHOOK_URL/) });
+    expect(res.find(r => r.target === 'discord')).toMatchObject({ status: 'error', detail: expect.stringMatching(/no Discord webhook URL saved/) });
     expect(res.find(r => r.target === 'file')?.status).toBe('sent');
   });
 

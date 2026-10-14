@@ -9,7 +9,7 @@ const items: Item[] = [
   { mode: 'morning', source: 'IGN', category: 'Gaming', title: 'GTA 6 trailer', link: 'https://ign.com/gta', published: '2026-10-08T10:00:00Z', summary: 's' },
 ];
 const config = normalizeConfig({ topics: { Comics: false } });
-const deployed = (f: string) => fs.readFileSync(path.resolve(__dirname, '../../n8n-export/nodes', f), 'utf8').replace(/\r\n/g, '\n');
+const deployed = (f: string) => fs.readFileSync(path.resolve(__dirname, '../reference/n8n-export/nodes', f), 'utf8').replace(/\r\n/g, '\n');
 
 describe('Build LLM Payload (verbatim n8n code under the shim)', () => {
   const p = buildLlmPayload({ mode: 'morning', items, morningDigest: '' }, config, []);
@@ -63,9 +63,12 @@ describe('Manual-mode exporters', () => {
     expect(out.systemInstructions).toContain('Politico. Developments since this morning.');
   });
 
-  it('chatgpt export is the deployed node verbatim apart from the summary-length patch', () => {
+  it('chatgpt export is the deployed node verbatim apart from the summary-length and duplicates patches', () => {
     const gen = fs.readFileSync(path.resolve(__dirname, '../src/pipeline/prompt/generated/exportChatgpt.ts'), 'utf8');
-    const original = deployed('digest_export__ChatGPT_.js');
+    const original = deployed('digest_export__ChatGPT_.js').replace(
+      'in its single best-fit section (or 📋 Everything Else). Every other appearance',
+      'in its single best-fit section (or 📋 Everything Else), naming every outlet that covered it, e.g. *(Eurogamer, Kotaku)*. Every other appearance',
+    );
     expect(gen).toContain(original.slice(0, original.indexOf("const TZ = 'America/New_York';")));
     expect(gen).toContain(original.slice(original.indexOf('SUMMARIES: 2–3 sentences each, no filler.') + 'SUMMARIES: 2–3 sentences each, no filler.'.length));
   });

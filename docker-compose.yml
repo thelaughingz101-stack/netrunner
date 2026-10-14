@@ -15,3 +15,14 @@ services:
       - "8787:8787"
     volumes:
       - ./data:/data
+    # Optional: keep API keys out of .env with Docker secrets. Put each key alone in a file under ./secrets/
+    # (chmod 600), leave it blank in .env, and uncomment these lines and the block at the bottom.
+    # secrets: [gemini_api_key, discord_webhook_url]
+    # environment:  (merge into the block above)
+    #   GEMINI_API_KEY_FILE: /run/secrets/gemini_api_key
+    #   DISCORD_WEBHOOK_URL_FILE: /run/secrets/discord_webhook_url
+# secrets:
+#   gemini_api_key:
+#     file: ./secrets/gemini_api_key.txt
+#   discord_webhook_url:
+#     file: ./secrets/discord_webhook_url.txt

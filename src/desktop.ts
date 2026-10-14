@@ -10,7 +10,7 @@
 import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { dataDir, env } from './env.js';
+import { dataDir, env, EnvError } from './env.js';
 import { log } from './logger.js';
 import { startServer } from './server/start.js';
 
@@ -100,9 +100,11 @@ async function main() {
 }
 
 main().catch(err => {
-  const msg = (err as NodeJS.ErrnoException).code === 'EADDRINUSE'
-    ? `Port ${env().PORT} is already in use by another program. Close it, or set PORT in .env.`
-    : `NetRunner could not start:\n\n${(err as Error).message}\n\nDetails are in data\\logs\\netrunner.log.`;
+  const msg = err instanceof EnvError
+    ? `NetRunner could not start because a setting in .env has a value it can't use:\n\n${err.issues.map(i => `${i.key}: ${i.message}`).join('\n')}\n\nFix it in .env (in the NetRunner folder) and open NetRunner again.`
+    : (err as NodeJS.ErrnoException).code === 'EADDRINUSE'
+      ? `Port ${env().PORT} is already in use by another program. Close it, or set PORT in .env.`
+      : `NetRunner could not start:\n\n${(err as Error).message}\n\nDetails are in data\\logs\\netrunner.log.`;
   log.fatal({ err }, 'desktop app failed to start');
   messageBox(msg);
   setTimeout(() => process.exit(1), 500);

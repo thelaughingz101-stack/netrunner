@@ -19,7 +19,7 @@ export function assignIds(items: Item[]): Item[] {
 export const ID_RULE = `ITEM IDS (machine-checked — every FEED item in the JSON has an "id" field such as "N017"):
 - End EVERY bullet that reports a FEED item — in a topic section, 📋 Everything Else, or the 🗒️ EXCLUDED ledger — with that item's id tag in square brackets, e.g. "- [**Headline**](url) — summary. *(Source)* [#N017]".
 - This includes EVERY 🗒️ EXCLUDED line: "- Headline (Source) — reason: filler [#N042]". An untagged ledger line does not count.
-- One tag per bullet. Search-sourced items (not in the feed JSON) get NO tag. Never invent an id.
+- Each story gets ONE bullet. When several FEED items report the same story, write one bullet naming every outlet and end it with ALL of their tags, e.g. "*(Eurogamer, Kotaku)* [#N017][#N042]" — never a second bullet for the same story. Search-sourced items (not in the feed JSON) get NO tag. Never invent an id.
 - Your output is checked programmatically against the full id list; any untagged feed item counts as dropped.`;
 
 /** Adds the tagging rule to the system prompt (and the identical Gemini systemInstruction). */

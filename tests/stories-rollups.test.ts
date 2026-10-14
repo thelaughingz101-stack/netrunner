@@ -44,7 +44,7 @@ describe('story tracker (SQLite port)', () => {
   });
 
   it('imports the legacy story-tracker.json and drops the junk entries', () => {
-    const legacy = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../story-tracker.json'), 'utf8'));
+    const legacy = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../reference/story-tracker.json'), 'utf8'));
     const r = importLegacyTracker(legacy);
     expect(r.imported + r.skipped).toBe(legacy.stories.length);
     expect(r.skipped).toBeGreaterThanOrEqual(11);

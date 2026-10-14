@@ -30,6 +30,14 @@ describe('netrunner-config.html', () => {
     expect(src).not.toMatch(/llm\.apiKeys|delivery\.discordWebhookUrl/);
   });
 
+  it('can export and import settings, and "Load" is now "Undo changes"', () => {
+    expect(src).toContain('Export settings');
+    expect(src).toContain('Import settings');
+    expect(src).toContain('/api/config/import');
+    expect(src).toContain('Undo changes');
+    expect(src).not.toMatch(/>\s*Load\s*</);
+  });
+
   it('loads only vendored scripts', () => {
     expect(html).not.toMatch(/<script[^>]+src="https?:/);
   });

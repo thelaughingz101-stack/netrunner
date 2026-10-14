@@ -376,7 +376,7 @@ const TABS = [
 
 // ── SECTIONS ──────────────────────────────────────────────────────────────────
 
-function TemplatesTab({ onApply }) {
+function TemplatesTab({ onApply, onExport, onImport }) {
   return (
     <div>
       <h1 style={s.h1}>Get started</h1>
@@ -396,6 +396,15 @@ function TemplatesTab({ onApply }) {
             <button style={{ ...s.btn, background:C.orange, color:"#1a0d07", boxShadow:`0 0 18px ${C.orange}33`, clipPath:NOTCH }}>Use this →</button>
           </div>
         ))}
+      </div>
+      <div style={{ ...s.card, marginTop:18 }}>
+        <SectionTitle hint="API keys are never included">Your settings</SectionTitle>
+        <Row label="Move to another PC, or keep a backup" sub="Export saves everything on screen to a file. Import loads a file from Export (or an old n8n digest-config.json); press Save to keep it.">
+          <div style={{ display:"flex", gap:8 }}>
+            <button onClick={onExport} style={{ ...s.btn, whiteSpace:"nowrap", background:"transparent", color:C.orange, border:`1px solid ${C.orangeLn}` }}>Export settings</button>
+            <button onClick={onImport} style={{ ...s.btn, whiteSpace:"nowrap", background:"transparent", color:C.orange, border:`1px solid ${C.orangeLn}` }}>Import settings…</button>
+          </div>
+        </Row>
       </div>
     </div>
   );
@@ -533,11 +542,12 @@ function SourcesTab({ config, update }) {
   );
 }
 
-// Shows whether a server-side secret is set in .env — the value itself never reaches the browser.
+// Shows whether a server-side secret is set — the value itself never reaches the browser.
 // Plain status text, deliberately not styled like an input or button: there's nothing to click.
-// Keys and delivery settings stored in the server's .env, editable here. The server never sends a secret
-// back: only whether it's set and its last 4 characters. Values are written straight into .env.
-const KeysCtx = React.createContext({ keys:{}, saveKeys: async () => {} });
+// Keys and delivery settings stored on the server, editable here. The server never sends a secret back:
+// only whether it's set and its last 4 characters. On Windows secrets are saved encrypted (keyStorage
+// "tpm" / "dpapi" / "encrypted"), elsewhere straight into .env ("env"); other settings always go to .env.
+const KeysCtx = React.createContext({ keys:{}, saveKeys: async () => {}, keyStorage:"env" });
 
 function KeyField({ k, label, secret = true, placeholder = "", help }) {
   const { keys, saveKeys } = React.useContext(KeysCtx);
@@ -586,12 +596,19 @@ function KeyField({ k, label, secret = true, placeholder = "", help }) {
   );
 }
 
+const KEY_STORAGE_TEXT = {
+  tpm: "Keys are saved encrypted, locked by this PC's TPM chip, and used right away.",
+  dpapi: "Keys are saved encrypted, locked to your Windows account on this PC, and used right away.",
+  encrypted: "Keys are saved encrypted, locked to this PC, and used right away.",
+};
+
 function EnvFileLinks() {
+  const { keyStorage } = React.useContext(KeysCtx);
   const open = how => api("/api/keys/open", { method:"POST", body:{ how } }).catch(e => window.alert("Couldn't open it: " + e.message));
   const link = { fontFamily:F.mono, fontSize:11.5, color:C.orange, cursor:"pointer", background:"none", border:"none", padding:0, textDecoration:"underline", textUnderlineOffset:3 };
   return (
     <p style={{ fontFamily:F.body, fontSize:12, color:C.faint, margin:"6px 0 0", lineHeight:1.6 }}>
-      Saved to the server's .env file and used right away, no restart needed. Prefer editing by hand? <button style={link} onClick={() => open("file")}>Open .env</button> · <button style={link} onClick={() => open("folder")}>Show in folder</button>
+      {KEY_STORAGE_TEXT[keyStorage] ? <>{KEY_STORAGE_TEXT[keyStorage]} Other settings go in .env: </> : <>Saved to the server's .env file and used right away, no restart needed. Prefer editing by hand? </>}<button style={link} onClick={() => open("file")}>Open .env</button> · <button style={link} onClick={() => open("folder")}>Show in folder</button>
     </p>
   );
 }
@@ -971,7 +988,7 @@ function LLMTab({config, update, updateLLMPrimary, runForPrompt, promptResult, p
             })}
           </div>
           <div style={s.card}>
-            <SectionTitle hint="keys live in the server's .env, never in the browser or config">API keys</SectionTitle>
+            <SectionTitle hint="keys stay on the server, never in the browser or config">API keys</SectionTitle>
             <KeyField k="GEMINI_API_KEY" label="Gemini API key" placeholder="AIza…" help="Get one at aistudio.google.com → Get API key." />
             <KeyField k="ANTHROPIC_API_KEY" label="Claude API key" placeholder="sk-ant-…" help="Get one at console.anthropic.com → API Keys." />
             <KeyField k="OLLAMA_URL" label="Ollama address" secret={false} placeholder="http://localhost:11434" help="Ollama runs locally, so it needs no key, just the address it listens on." />
@@ -1494,12 +1511,14 @@ function DigestConfig() {
   const [layout, setLayout] = useState(() => localStorage.getItem("nr_layout") || "tabs");
   const [bg, setBg]         = useState(() => localStorage.getItem("nr_bg") || "off");
   const [n8nStatus, setN8nStatus] = useState("checking"); // server status (name kept to minimise UI churn)
-  const [secrets, setSecrets] = useState({}); // which keys are set in the server's .env (never the values)
-  const [keys, setKeys] = useState({});       // per-key status for the editable .env fields (never secret values)
+  const [secrets, setSecrets] = useState({}); // which keys are set on the server (never the values)
+  const [keys, setKeys] = useState({});       // per-key status for the editable fields (never secret values)
+  const [keyStorage, setKeyStorage] = useState("env"); // where the server keeps secrets: env | tpm | dpapi | encrypted
   const saveKeys = async (updates) => {
     const res = await api("/api/keys", { method:"PUT", body: updates });
     setKeys(res.keys || {});
     setSecrets(res.secrets || {});
+    if (res.keyStorage) setKeyStorage(res.keyStorage);
   };
   const [runState, setRunState] = useState("idle"); // idle | running | success | error
 
@@ -1558,6 +1577,9 @@ function DigestConfig() {
     return res.config;
   };
 
+  // Delivery results that failed, as "• discord: why" lines. A run can write the digest and still fail to send it.
+  const deliveryFailures = ds => (ds || []).filter(d => d.status === "error").map(d => `• ${d.target}: ${d.detail}`);
+
   const runNow = async () => {
     setRunState("running");
     setRunError("");
@@ -1567,12 +1589,18 @@ function DigestConfig() {
       // enforces its own per-call timeout, so the page just waits for the real answer.
       const payload = await api("/api/run", { method: "POST", timeoutMs: 60 * 60000,
         body: { lookbackWindow: saved.schedule.lookbackWindow || "12h" } });
-      setRunState("success");
       if (payload && payload.digest) {
         const date = payload.date || new Date().toISOString().slice(0,10);
         await addEntry(date, payload.mode || "manual", payload.digest, true, payload.digestId);
       }
-      setTimeout(() => setRunState("idle"), 4000);
+      const failed = deliveryFailures(payload && payload.delivery);
+      if (failed.length) {
+        setRunState("error");
+        setRunError(`The digest was written and saved (Output tab), but sending it failed:\n${failed.join("\n")}`);
+      } else {
+        setRunState("success");
+        setTimeout(() => setRunState("idle"), 4000);
+      }
     } catch(e) {
       setRunState("error");
       // Stays up until dismissed — a 6-second flash was easy to miss.
@@ -1624,25 +1652,30 @@ function DigestConfig() {
   // Load the saved config + output history from the server on open.
   useEffect(() => {
     (async () => {
+      const notices = []; // problems to show on open: unreadable keys, the last run failing or not sending
       try {
         const res = await api("/api/config");
+        notices.push(...(res.problems || []));
         setConfig(res.config);
         setSecrets(res.secrets || {});
         setKeys(res.keys || {});
+        if (res.keyStorage) setKeyStorage(res.keyStorage);
         setFlash("loaded");
         setTimeout(() => setFlash(null), 2500);
       } catch(e) { setFlash("error"); setTimeout(() => setFlash(null), 2500); }
       await refreshEntries();
-      // Scheduled runs happen with no window open — if the latest one failed, say so (and why).
+      // Scheduled runs happen with no window open — if the latest one failed or didn't send, say so (and why).
       try {
         const { runs } = await api("/api/runs");
         const last = (runs || []).find(r => r.status === "ok" || r.status === "error");
-        if (last && last.status === "error" && last.error) {
-          const when = new Date(last.finishedAt || last.startedAt).toLocaleString();
-          setRunState("error");
-          setRunError(`Last ${last.trigger === "schedule" ? "scheduled " : ""}${last.mode || ""} run (${when}) failed:\n${last.error}`);
+        const what = last && `Last ${last.trigger === "schedule" ? "scheduled " : ""}${last.mode || ""} run (${new Date(last.finishedAt || last.startedAt).toLocaleString()})`;
+        if (last && last.status === "error" && last.error) notices.push(`${what} failed:\n${last.error}`);
+        else if (last && last.status === "ok" && !last.dryRun) {
+          const failed = deliveryFailures((await api(`/api/runs/${encodeURIComponent(last.id)}`)).deliveries);
+          if (failed.length) notices.push(`${what} wrote the digest, but sending it failed:\n${failed.join("\n")}`);
         }
       } catch(e) {}
+      if (notices.length) { setRunState("error"); setRunError(notices.join("\n\n")); }
       // Opened by a scheduled run (Delivery → Open in NetRunner): /?digest=<id>
       const digestId = Number(new URLSearchParams(location.search).get("digest"));
       if (digestId) {
@@ -1690,23 +1723,61 @@ function DigestConfig() {
     setTimeout(() => setFlash(null), 2500);
   };
 
-  // "Load" = discard unsaved edits and reload what the server has.
+  // "Undo changes" = discard unsaved edits and reload what the server has.
   const loadConfig = async () => {
     try {
       const res = await api("/api/config");
       setConfig(res.config);
       setSecrets(res.secrets || {});
-      setFlash("loaded");
+      setFlash("reverted");
     } catch(e) { setFlash("error"); }
     setTimeout(() => setFlash(null), 2500);
+  };
+
+  // Export settings: what's on screen, as a file (the config never holds API keys or the Discord webhook).
+  const exportSettings = () => {
+    const file = { app: "NetRunner", kind: "settings", exportedAt: new Date().toISOString(), config };
+    const blob = new Blob([JSON.stringify(file, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `netrunner-settings-${new Date().toISOString().slice(0,10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  // Import settings: the server checks the file and fills in missing options; like a template, it isn't saved until Save.
+  const importSettings = () => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".json,application/json";
+    input.onchange = async () => {
+      const file = input.files && input.files[0];
+      if (!file) return;
+      try {
+        let parsed;
+        try { parsed = JSON.parse(await file.text()); }
+        catch(e) { throw new Error("That file isn't a NetRunner settings file. Use one made with Export settings."); }
+        const res = await api("/api/config/import", { method: "POST", body: parsed });
+        setConfig(res.config);
+        setFlash("imported");
+        setTimeout(() => setFlash(null), 6000);
+      } catch(e) {
+        const d = e.data || {};
+        window.alert("Couldn't import those settings:\n" + (d.issues ? d.issues.map(i => `${i.path}: ${i.message}`).join("\n") : (d.error || e.message)));
+      }
+    };
+    input.click();
   };
 
   const enabledTopics  = TOPICS.filter(t => config.topics[t]).length;
   const enabledSources = Object.entries(config.sources).filter(([src, on]) => on && COUNTABLE_SOURCE_SET.has(src)).length + config.customSources.rss.length + config.customSources.youtube.length;
 
   const content = (
-    <KeysCtx.Provider value={{ keys, saveKeys }}>
-      {tab === "templates" && <TemplatesTab onApply={applyTemplate} />}
+    <KeysCtx.Provider value={{ keys, saveKeys, keyStorage }}>
+      {tab === "templates" && <TemplatesTab onApply={applyTemplate} onExport={exportSettings} onImport={importSettings} />}
       {tab === "topics"    && <TopicsTab    config={config} update={update} />}
       {tab === "sources"   && <React.Fragment><SourcesTab config={config} update={update} /><CustomSourcesTab config={config} update={update} /></React.Fragment>}
       {tab === "delivery"  && <DeliveryTab  config={config} update={update} secrets={secrets} />}
@@ -1758,7 +1829,7 @@ function DigestConfig() {
         </div>
         {flash && (
           <span style={{ fontFamily:F.mono, fontSize:12, color: flash==="error" ? C.red : C.green, letterSpacing:"0.03em", flexShrink:0 }}>
-            {flash==="saved" ? "✓ config saved" : flash==="loaded" ? "✓ config loaded" : "✕ error"}
+            {flash==="saved" ? "✓ config saved" : flash==="loaded" ? "✓ config loaded" : flash==="reverted" ? "✓ back to your saved settings" : flash==="imported" ? "✓ settings imported. Press Save to keep them" : "✕ error"}
           </span>
         )}
       </div>
@@ -1783,7 +1854,7 @@ function DigestConfig() {
         )}
       </div>
       <div style={{ display:"flex", alignItems:"center", gap:10, flexShrink:0 }}>
-        <button onClick={loadConfig} style={{ ...s.btn, background:"transparent", color:C.muted, border:`1px solid ${C.border}` }}>Load</button>
+        <button onClick={loadConfig} title="Discard unsaved changes and go back to your last saved settings" style={{ ...s.btn, background:"transparent", color:C.muted, border:`1px solid ${C.border}` }}>Undo changes</button>
         <button onClick={saveConfig} style={{ ...s.btn, background:"transparent", color:C.orange, border:`1px solid ${C.orangeLn}` }}>Save</button>
         <button onClick={isLast ? saveConfig : goNext} style={{ ...s.btn, background:C.orange, color:"#1a0d07", boxShadow:`0 0 18px ${C.orange}44`, clipPath:NOTCH, paddingRight:24 }}>
           {isLast ? "Finish ✓" : "Next →"}

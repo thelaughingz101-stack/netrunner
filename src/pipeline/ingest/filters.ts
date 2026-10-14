@@ -91,6 +91,62 @@ export function clusterSameStory(items: Item[], threshold = 0.5): { items: Item[
   return { items: out, merged: items.length - out.length };
 }
 
+// ── Cross-category merging (new; not in n8n) ────────────────────────────────────
+// clusterSameStory never looks across categories, so one story tagged differently by two outlets
+// (AP → US Politics, NPR → World News) reached the LLM twice and showed up in two sections.
+// Stricter than the same-category rule, tuned on real digests: ≥ 3 shared keywords covering
+// ≥ 55% of the shorter headline and ≥ 30% of the longer one ("Hi there" or two different
+// Forza Horizon 6 stories don't merge; the Nobel Peace Prize from AP and NPR does).
+const CROSS_MIN_SHARED = 3;
+const CROSS_MIN_SMALLER = 0.55;
+const CROSS_MIN_LARGER = 0.3;
+
+function sameStoryKeywords(setA: Set<string>, setB: Set<string>): boolean {
+  let shared = 0;
+  for (const w of setA) if (setB.has(w)) shared++;
+  const smaller = Math.min(setA.size, setB.size);
+  const larger = Math.max(setA.size, setB.size);
+  return shared >= CROSS_MIN_SHARED && shared / smaller >= CROSS_MIN_SMALLER && shared / larger >= CROSS_MIN_LARGER;
+}
+
+/** Same story across categories? (Same-category pairs are clusterSameStory's job.) */
+export const sameStoryAcross = (a: string, b: string) => sameStoryKeywords(new Set(keywordsFrom(a)), new Set(keywordsFrom(b)));
+
+// Sections a merged story only goes to when nothing better covered it: Custom Feeds is the fallback for
+// untagged sources, Leaks & Rumors would file a confirmed story as a rumor, Notable Trends is a catch-all.
+const WEAK_SECTIONS = ['Custom Feeds', 'Leaks & Rumors', 'Notable Trends'];
+const bestSection = (group: Item[]) =>
+  [...group].sort((a, b) => weakness(a.category) - weakness(b.category))[0].category;
+const weakness = (category: string) => {
+  const i = WEAK_SECTIONS.indexOf(category);
+  return i < 0 ? -1 : WEAK_SECTIONS.length - i; // real beats first, then Notable Trends, Leaks, Custom Feeds
+};
+
+/** Runs after clusterSameStory: merges (clusters of) items from different categories that report the same story. */
+export function mergeAcrossCategories(items: Item[]): { items: Item[]; merged: number } {
+  const keywords = items.map(it => new Set(keywordsFrom(it.title))); // once per item, not once per pair
+  const used = new Set<number>();
+  const out: Item[] = [];
+  for (let i = 0; i < items.length; i++) {
+    if (used.has(i)) continue;
+    const group = [items[i]];
+    for (let j = i + 1; j < items.length; j++) {
+      if (used.has(j) || items[j].category === items[i].category) continue;
+      if (sameStoryKeywords(keywords[i], keywords[j])) { group.push(items[j]); used.add(j); }
+    }
+    if (group.length === 1) { out.push(items[i]); continue; }
+    const primary = group[0];
+    out.push({
+      ...primary,
+      category: bestSection(group),
+      source: group.map(g => g.source).join(', '),
+      clusterSize: group.reduce((n, g) => n + (g.clusterSize ?? 1), 0),
+      clusterLinks: group.flatMap(g => g.clusterLinks ?? [g.link]).filter(Boolean),
+    });
+  }
+  return { items: out, merged: items.length - out.length };
+}
+
 /** Drops items whose category is toggled off. Empty toggles = pass-through. */
 export function topicFilter(items: Item[], config: Config): { items: Item[]; dropped: number } {
   const toggles = config.topics || {};

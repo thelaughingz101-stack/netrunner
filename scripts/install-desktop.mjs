@@ -1,12 +1,15 @@
 // npm run install:desktop — (Windows) builds the NetRunner icon from public/netrunner-logo.svg and
 // creates "NetRunner" shortcuts on the Desktop and in the Start menu. The shortcut runs the desktop
 // app (src/desktop.ts) under a headless console, so there is no terminal window. Safe to re-run.
+// Also records this folder in %LOCALAPPDATA%\NetRunner\install.json, so Setup from a newer download
+// updates this install instead of making a second one (scripts/setup-update.mjs).
 //   --icon-only   rebuild public/netrunner.ico without touching shortcuts
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { markerFile } from './setup-update.mjs';
 
 const appDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const logo = path.join(appDir, 'public', 'netrunner-logo.svg');
@@ -95,6 +98,9 @@ fs.writeFileSync(ico, buildIco(renderPngs()));
 console.log(`✓ icon   ${path.relative(appDir, ico)} (${SIZES.join(', ')} px)`);
 if (!process.argv.includes('--icon-only')) {
   for (const lnk of createShortcuts()) console.log(`✓ shortcut ${lnk}`);
+  const { version } = JSON.parse(fs.readFileSync(path.join(appDir, 'package.json'), 'utf8'));
+  fs.mkdirSync(path.dirname(markerFile()), { recursive: true });
+  fs.writeFileSync(markerFile(), JSON.stringify({ dir: appDir, version, installedAt: new Date().toISOString() }, null, 2));
   console.log('\nDouble-click NetRunner on your Desktop (or search "NetRunner" in Start). Closing its window stops it;');
   console.log('scheduled digests keep running through Windows Task Scheduler either way.');
 }

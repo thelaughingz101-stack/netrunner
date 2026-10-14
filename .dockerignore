@@ -5,3 +5,4 @@ data
 .test-data
 public/vendor
 *.log
+secrets

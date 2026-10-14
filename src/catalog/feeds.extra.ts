@@ -26,6 +26,12 @@ export const FEED_OVERRIDES: Record<string, Partial<FeedDef> | null> = {
   'Reuters':       { url: 'https://news.google.com/rss/search?q=site:reuters.com+when:1d&hl=en-US&gl=US&ceid=US:en' },
   // 429 on every request; replaced by The Decoder / MIT Technology Review below.
   'VentureBeat AI': null,
+  // Plain http: anyone on the network path could alter what reaches the AI Writer. All serve https.
+  'PlayStation Blog':  { url: 'https://feeds.feedburner.com/psblog' },
+  'IGN':               { url: 'https://feeds.ign.com/ign/all' },
+  'Ars Technica':      { url: 'https://feeds.arstechnica.com/arstechnica/index' },
+  'BBC World News':    { url: 'https://feeds.bbci.co.uk/news/world/rss.xml' },
+  'Politico Congress': { url: 'https://rss.politico.com/congress.xml' },
 };
 
 const yt = (id: string) => `https://www.youtube.com/feeds/videos.xml?channel_id=${id}`;

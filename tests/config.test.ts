@@ -5,7 +5,7 @@ import { buildApp } from '../src/server/app.js';
 import { TOPICS, uiCatalog } from '../src/catalog/index.js';
 import { EXTRA_FEEDS, FEED_OVERRIDES } from '../src/catalog/feeds.extra.js';
 
-const LEGACY = path.resolve(__dirname, '../../digest-config.json');
+const LEGACY = path.resolve(__dirname, '../reference/digest-config.json');
 
 describe('config layer', () => {
   beforeEach(() => freshState({ LEGACY_CONFIG_PATH: LEGACY }));
@@ -55,6 +55,49 @@ describe('config layer', () => {
     const app = await buildApp();
     const put = await app.inject({ method: 'PUT', url: '/api/config', payload: { llm: { primary: 'claude', fallbackChain: ['claude', 'gemini', 'gemini', 'ollama'] } } });
     expect(put.json().config.llm.fallbackChain).toEqual(['gemini', 'ollama']);
+  });
+
+  describe('import settings (POST /api/config/import: check + fill defaults, never saves)', () => {
+    it('accepts a NetRunner export, fills missing options, and does not save it', async () => {
+      const app = await buildApp();
+      const before = (await app.inject({ method: 'GET', url: '/api/config' })).json();
+      const file = { app: 'NetRunner', kind: 'settings', exportedAt: '2026-10-14T12:00:00Z',
+        config: { format: { language: 'Spanish' }, schedule: { morningTime: '06:30' }, llm: { apiKeys: { gemini: 'leaked' } } } };
+      const res = await app.inject({ method: 'POST', url: '/api/config/import', payload: file });
+      expect(res.statusCode).toBe(200);
+      const { config } = res.json();
+      expect(config.format.language).toBe('Spanish');
+      expect(config.schedule.morningTime).toBe('06:30');
+      expect(config.topics['World News']).toBe(true); // filled in
+      expect(config.llm.apiKeys).toBeUndefined();     // secrets never come through
+      const after = (await app.inject({ method: 'GET', url: '/api/config' })).json();
+      expect(after.version).toBe(before.version);
+      expect(after.config.format.language).not.toBe('Spanish');
+    });
+
+    it('accepts an old n8n digest-config.json and strips its secrets', async () => {
+      const fs = await import('node:fs');
+      const app = await buildApp();
+      const res = await app.inject({ method: 'POST', url: '/api/config/import', payload: JSON.parse(fs.readFileSync(LEGACY, 'utf8')) });
+      expect(res.statusCode).toBe(200);
+      expect(JSON.stringify(res.json().config)).not.toMatch(/AQ\.Ab8|discord\.com\/api\/webhooks/);
+    });
+
+    it('rejects a file that is not NetRunner settings', async () => {
+      const app = await buildApp();
+      for (const payload of [{ hello: 'world' }, { app: 'NetRunner', kind: 'settings', config: 'nope' }, [1, 2]]) {
+        const res = await app.inject({ method: 'POST', url: '/api/config/import', payload });
+        expect(res.statusCode, JSON.stringify(payload)).toBe(400);
+        expect(res.json().error).toMatch(/isn't a NetRunner settings file/);
+      }
+    });
+
+    it('rejects invalid values with field paths', async () => {
+      const app = await buildApp();
+      const res = await app.inject({ method: 'POST', url: '/api/config/import', payload: { schedule: { morningTime: '7am' } } });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().issues.map((i: { path: string }) => i.path)).toContain('schedule.morningTime');
+    });
   });
 
   it('serves a catalog with every topic: the 158 deployed feeds, minus removed dead ones, plus additions', async () => {

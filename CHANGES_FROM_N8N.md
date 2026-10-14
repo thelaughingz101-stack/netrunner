@@ -1,6 +1,6 @@
 # Changes from the n8n workflow
 
-Source of truth for "what n8n did": the deployed workflow `jPDyDRnmxggd2IJo`, exported (secrets redacted) to `../n8n-export/`.
+Source of truth for "what n8n did": the deployed workflow `jPDyDRnmxggd2IJo`, exported (secrets redacted) to `reference/n8n-export/` (git-ignored, kept locally).
 Everything not listed here was ported as-is.
 
 ## Prompt text
@@ -16,6 +16,9 @@ The Autopilot prompt (Build LLM Payload) and all 5 Manual-mode exporters run **b
 | `topics-*-payload` | Build LLM Payload | Topic toggles were ignored: it asked the model to web-search every topic (trending X topics, market numbers, comics, anime, science…) and forced Leaks & Rumors and Blindspot into every digest, so a Leaks-only digest came back full of other topics, mostly in Everything Else. Searches now follow the enabled topics, search results may only go in enabled sections (never Everything Else), and the Comics rules only apply when Comics is on. With every topic on, the search list is word-for-word what n8n sent. |
 | `topics-*-<platform>` | all 5 exporters | Business & Finance, Blindspot and Leaks & Rumors were hardcoded into every prompt (Leaks twice: this was the duplicate-header issue) and World News was missing. All four are now normal toggleable sections that follow the section order. |
 | `summary-length-def-*` / `summary-length-rule-*` | all 5 exporters | They hardcoded "SUMMARIES: 2–3 sentences each" and ignored Format → Summary length. They now use the same three rules as Build LLM Payload. |
+| `duplicates-payload` | Build LLM Payload | It said two outlets covering the same story are NOT duplicates ("include both"), so one story could appear two or three times, often in different sections (the Oct 9 digest had the Cyberpunk 2077 movie in Gaming and twice in Leaks & Rumors). Now one story = one bullet in its best-fit section naming every outlet, and the `ITEM IDS` rule has it carry every item's tag (`[#N017][#N042]`) so coverage counts all of them. |
+| `duplicates-gemini` | Gemini exporter | Its duplicate definition ("include both") contradicted its own DUPLICATES rule ("each story appears ONCE"). The definition now agrees. |
+| `duplicates-cite-all-*` | all 5 exporters | The one copy of a story that's kept now names every outlet that covered it. |
 
 **Added to the Autopilot system prompt** (required by omission protection): one `ITEM IDS` block asking the model to end each feed-item bullet with its `[#N017]` tag. Tags are stripped before anything is delivered or saved.
 
@@ -31,6 +34,7 @@ The Autopilot prompt (Build LLM Payload) and all 5 Manual-mode exporters run **b
 | Gemini key | `?key=` query param | `x-goog-api-key` header | Same auth; keeps the key out of URLs |
 | Truncated output (`MAX_TOKENS`) | shipped with a ⚠️ banner | tries the next tier first; ships with the same banner only if no tier finishes | Fewer broken digests |
 | All tiers fail | shipped "⚠️ No digest available…" to every target | run marked `error`, nothing delivered, attempts logged | Don't spam Discord or email with an error string |
+| Same story, different sections | Same-Story Clustering only merged within one category | after the topic toggles, a stricter second pass also merges across categories (≥ 3 shared headline keywords covering ≥ 55% of the shorter and ≥ 30% of the longer headline; tuned on real digests) | One story tagged differently by two outlets reached the LLM twice and landed in two sections. Fewer items also means faster digests |
 | Omission protection | prompt wording only | IDs + programmatic diff, then re-run of only the missing items (≤2 rounds), then deterministic placement under 📋 Everything Else | Phase 3.4 |
 | Schedule | triggers hardcoded at 7:00 and 20:00; UI times ignored | built from the Schedule tab (times, timezone, frequency, skipWeekends) on every save. On Windows it is synced to Task Scheduler, so it runs with the app closed, wakes the PC from sleep, and catches up missed runs. Elsewhere it uses in-process cron | Your decision |
 | Rollup times | Sunday 12:00 / the 28th at 22:00 | same | — |

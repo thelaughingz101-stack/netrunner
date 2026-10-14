@@ -1,11 +1,12 @@
 // One-off generator: lifts the catalog data VERBATIM out of the deployed n8n Code nodes
-// (../n8n-export/nodes) so the port can't drift from what was actually running.
+// (reference/n8n-export/nodes) so the port can't drift from what was actually running.
 // Re-run only if you deliberately re-sync from a newer n8n export.
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const here = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Z]:)/, '$1'));
-const nodes = path.resolve(here, '../../n8n-export/nodes');
+const here = path.dirname(fileURLToPath(import.meta.url));
+const nodes = path.resolve(here, '../reference/n8n-export/nodes');
 const out = path.resolve(here, '../src/catalog');
 
 const slice = (src, startMarker, endMarker) => {

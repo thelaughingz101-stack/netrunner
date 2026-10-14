@@ -5,6 +5,8 @@ rem  Double-click this file. It installs Node.js if needed, installs NetRunner,
 rem  adds NetRunner to the Desktop and Start menu, and opens it.
 rem  Safe to run again: re-running repairs the install or updates the shortcuts
 rem  (for example after moving this folder).
+rem  Run from a newer download, it updates the existing install in place (keeping
+rem  its settings, keys and digests) instead of installing a second copy.
 rem
 rem  Developer option:  "Setup NetRunner.cmd" --no-shortcuts
 rem  installs only (no shortcuts, does not open the app).
@@ -55,7 +57,27 @@ rem --- 3. NetRunner must be closed (its files are in use while it runs) ------
 "%NODE_EXE%" -e "fetch('http://127.0.0.1:8787/api/health',{signal:AbortSignal.timeout(1500)}).then(()=>process.exit(1),()=>process.exit(0))"
 if errorlevel 1 goto :app_running
 
-rem --- 4. Install NetRunner's parts ------------------------------------------
+rem --- 4. Already installed somewhere else? Then update that install ----------
+if defined NO_SHORTCUTS goto :install_here
+set "TARGET_FILE=%TEMP%\netrunner-setup-target.txt"
+if exist "%TARGET_FILE%" del "%TARGET_FILE%"
+"%NODE_EXE%" scripts\setup-update.mjs "%TARGET_FILE%"
+if errorlevel 2 goto :update_refused
+if errorlevel 1 goto :update_failed
+rem The path is written as UTF-8: read it in code page 65001 so folders like C:\Users\Jose\... with
+rem accents survive, then switch back.
+for /f "tokens=2 delims=:." %%C in ('chcp') do set "OLD_CP=%%C"
+chcp 65001 >nul
+set "TARGET="
+set /p TARGET=<"%TARGET_FILE%"
+set "CD_FAILED=1"
+if defined TARGET cd /d "%TARGET%" && set "CD_FAILED=0"
+chcp %OLD_CP% >nul
+del "%TARGET_FILE%"
+if not defined TARGET goto :update_failed
+if not "%CD_FAILED%"=="0" goto :update_failed
+
+:install_here
 echo.
 echo   [2/4] Installing NetRunner (this is the slow part)...
 call "%NODE_DIR%npm.cmd" ci --no-audit --no-fund --loglevel=error
@@ -90,8 +112,10 @@ echo     2. AI Writer tab: paste your Gemini or Claude key.
 echo        (Or choose Free Copy-Paste mode, which needs no key.)
 echo     3. Press Save.
 echo.
-echo   Do not move or delete this folder: NetRunner runs from here.
-echo   If you do move it, double-click Setup NetRunner again.
+echo   NetRunner runs from: %CD%
+echo   Do not move or delete that folder. If you do move it, double-click
+echo   Setup NetRunner there again.
+if /i not "%CD%\"=="%~dp0" echo   This download folder was only used to update it, so you can delete it.
 echo.
 pause
 exit /b 0
@@ -161,11 +185,28 @@ echo.
 pause
 exit /b 1
 
+:update_refused
+echo.
+pause
+exit /b 1
+
+:update_failed
+echo.
+echo   PROBLEM: updating your existing NetRunner failed. The reason is just above.
+echo.
+echo   Your settings, keys and digests are in its .env and data folder; Setup never
+echo   changes those. Fix the problem above, then run "Setup NetRunner" again.
+echo.
+pause
+exit /b 1
+
 :npm_failed
 echo.
-echo   PROBLEM: installing NetRunner's parts failed (see the messages above).
+echo   PROBLEM: installing NetRunner's parts failed. The reason is in the npm messages
+echo   just above (lines starting with "npm error").
 echo.
-echo   Check your internet connection and run "Setup NetRunner" again.
+echo   Most common causes: no internet connection, a firewall or VPN blocking
+echo   registry.npmjs.org, or the disk being full. Fix that and run "Setup NetRunner" again.
 echo   If it keeps failing, send a screenshot of this window to whoever gave you NetRunner.
 echo.
 pause

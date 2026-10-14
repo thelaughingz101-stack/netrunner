@@ -1,8 +1,12 @@
 import 'dotenv/config';
 import path from 'node:path';
 import { z } from 'zod';
+import { initVault } from './vault.js';
 
-// Secrets and machine-specific settings live ONLY here (.env), never in config or code.
+// Before anything reads process.env: decrypt the API keys (Windows) and move plain-text ones out of .env.
+initVault();
+
+// Secrets and machine-specific settings live ONLY here (.env, or encrypted by vault.ts), never in config or code.
 const optional = z.string().trim().optional().transform(v => (v ? v : undefined));
 const int = (def: number) => z.coerce.number().int().positive().default(def);
 const bool = (def: boolean) =>
@@ -54,8 +58,19 @@ const EnvSchema = z.object({
 export type Env = z.infer<typeof EnvSchema>;
 
 let cached: Env | undefined;
+/** A value in .env (or the environment) NetRunner can't use. The message names each bad setting. */
+export class EnvError extends Error {
+  constructor(readonly issues: { key: string; message: string }[]) {
+    super(`a setting in .env has a value NetRunner can't use: ${issues.map(i => `${i.key}: ${i.message}`).join('; ')}`);
+  }
+}
+
 export function env(): Env {
-  if (!cached) cached = EnvSchema.parse(process.env);
+  if (!cached) {
+    const parsed = EnvSchema.safeParse(process.env);
+    if (!parsed.success) throw new EnvError(parsed.error.issues.map(i => ({ key: i.path.join('.'), message: i.message })));
+    cached = parsed.data;
+  }
   return cached;
 }
 

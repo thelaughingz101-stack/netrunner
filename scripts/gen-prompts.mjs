@@ -1,14 +1,15 @@
-// One-off generator: wraps the DEPLOYED n8n prompt-builder Code nodes (../n8n-export/nodes)
+// One-off generator: wraps the DEPLOYED n8n prompt-builder Code nodes (reference/n8n-export/nodes)
 // verbatim inside a tiny shim that stands in for n8n's `$('Node')` / `$input` accessors, so the
 // prompt text the LLM sees is byte-identical to what n8n sent — except for the PATCHES below,
 // each of which is a flagged, deliberate fix (also listed in CHANGES_FROM_N8N.md).
 // The generator fails loudly if a patch target is missing, so a re-sync can't silently skip one.
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { exporterTopicPatches, PAYLOAD_TOPIC_PATCHES } from './topic-patches.mjs';
 
-const here = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Z]:)/, '$1'));
-const nodes = path.resolve(here, '../../n8n-export/nodes');
+const here = path.dirname(fileURLToPath(import.meta.url));
+const nodes = path.resolve(here, '../reference/n8n-export/nodes');
 const outDir = path.resolve(here, '../src/pipeline/prompt/generated');
 fs.mkdirSync(outDir, { recursive: true });
 
@@ -38,11 +39,30 @@ const TZ = 'America/New_York';`,
 ];
 const summary = name => SUMMARY_PATCHES.map(p => ({ ...p, id: `${p.id}-${name}` }));
 
+// One story reported by several outlets showed up several times, often in different sections.
+const OLD_DUPLICATE_DEFINITION = '- DUPLICATE DEFINITION: A duplicate is the same URL, or the same story reported by the same outlet twice. Two different outlets covering the same story are NOT duplicates — include both.';
+const OLD_DUPLICATES_RULE = 'DUPLICATES: each story appears ONCE, in its single best-fit section (or 📋 Everything Else). Every other appearance';
+const DUPLICATE_PATCHES = [
+  {
+    id: 'duplicates-cite-all',
+    why: 'Copy-paste exporters: the story kept in its best-fit section now names every outlet that covered it, so dropping the other copies loses no attribution.',
+    from: OLD_DUPLICATES_RULE,
+    to: 'DUPLICATES: each story appears ONCE, in its single best-fit section (or 📋 Everything Else), naming every outlet that covered it, e.g. *(Eurogamer, Kotaku)*. Every other appearance',
+  },
+];
+const dupes = name => DUPLICATE_PATCHES.map(p => ({ ...p, id: `${p.id}-${name}` }));
+
 const TARGETS = [
   {
     file: 'Build LLM Payload.js', out: 'buildLlmPayload.ts', node: 'Build LLM Payload',
     patches: [
       ...PAYLOAD_TOPIC_PATCHES,
+      {
+        id: 'duplicates-payload',
+        why: 'n8n told the AI Writer that two outlets covering the same story are NOT duplicates ("include both"), so one story appeared two or three times, often in different sections. Now one story = one bullet in its best-fit section naming every outlet (and carrying every item id, see ID_RULE).',
+        from: OLD_DUPLICATE_DEFINITION,
+        to: '- DUPLICATE DEFINITION: A duplicate is the same story (the same event, announcement, or release) appearing more than once in the feed, whether from one outlet or several, and whichever section each copy was tagged for. Write each story ONCE: one bullet in its single best-fit section, naming every outlet that covered it, e.g. *(Eurogamer, Kotaku, VGC)*. That one bullet accounts for every copy. Separate stories about the same subject (two different announcements about one show) are NOT duplicates — keep both.',
+      },
       {
         id: 'filler-splice-payload',
         why: 'update.py spliced FILLER REJECTION into the middle of the "NEVER invent" sentence (and left a double period). Restored the sentence and made FILLER its own bullet.',
@@ -57,10 +77,10 @@ const TARGETS = [
       },
     ],
   },
-  { file: 'digest_export__ChatGPT_.js', out: 'exportChatgpt.ts', node: 'digest_export_(ChatGPT)', patches: [...summary('chatgpt'), ...exporterTopicPatches('chatgpt')] },
-  { file: 'digest_export__Claude_.js', out: 'exportClaude.ts', node: 'digest_export_(Claude)', patches: [...summary('claude'), ...exporterTopicPatches('claude')] },
-  { file: 'digest_export__grok_.js', out: 'exportGrok.ts', node: 'digest_export_(grok)', patches: [...summary('grok'), ...exporterTopicPatches('grok')] },
-  { file: 'Digest_export__DeepSeek_.js', out: 'exportDeepseek.ts', node: 'Digest_export_[DeepSeek]', patches: [...summary('deepseek'), ...exporterTopicPatches('deepseek')] },
+  { file: 'digest_export__ChatGPT_.js', out: 'exportChatgpt.ts', node: 'digest_export_(ChatGPT)', patches: [...summary('chatgpt'), ...dupes('chatgpt'), ...exporterTopicPatches('chatgpt')] },
+  { file: 'digest_export__Claude_.js', out: 'exportClaude.ts', node: 'digest_export_(Claude)', patches: [...summary('claude'), ...dupes('claude'), ...exporterTopicPatches('claude')] },
+  { file: 'digest_export__grok_.js', out: 'exportGrok.ts', node: 'digest_export_(grok)', patches: [...summary('grok'), ...dupes('grok'), ...exporterTopicPatches('grok')] },
+  { file: 'Digest_export__DeepSeek_.js', out: 'exportDeepseek.ts', node: 'Digest_export_[DeepSeek]', patches: [...summary('deepseek'), ...dupes('deepseek'), ...exporterTopicPatches('deepseek')] },
   {
     file: 'digest_export__Gemini_.js', out: 'exportGemini.ts', node: 'digest_export_(Gemini)',
     patches: [
@@ -88,7 +108,14 @@ const TARGETS = [
         from: '"- Headline (Source) — reason: duplicate | stale | unverified | spam". If nothing was excluded',
         to: '"- Headline (Source) — reason: duplicate | stale | unverified | spam | filler". If nothing was excluded',
       },
+      {
+        id: 'duplicates-gemini',
+        why: 'The Gemini exporter said both "two outlets covering the same story are NOT duplicates — include both" and "each story appears ONCE". The definition now agrees with the DUPLICATES rule.',
+        from: OLD_DUPLICATE_DEFINITION,
+        to: '- DUPLICATE DEFINITION: A duplicate is the same story (the same event, announcement, or release), whether reported by one outlet or several. Separate stories about the same subject are NOT duplicates.',
+      },
       ...summary('gemini'),
+      ...dupes('gemini'),
       ...exporterTopicPatches('gemini'),
     ],
   },

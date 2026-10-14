@@ -3,9 +3,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
-const root = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Z]:)/, '$1')), '..');
+// fileURLToPath, not URL.pathname: pathname keeps %20, so a folder path with spaces copied the files into a "…%20…" folder.
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dest = path.join(root, 'public', 'vendor');
 fs.mkdirSync(dest, { recursive: true });
 

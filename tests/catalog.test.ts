@@ -14,6 +14,10 @@ describe('catalog additions and fixes', () => {
     for (const name of Object.keys(FEED_OVERRIDES)) expect(BUILTIN_FEEDS.filter(f => f.name === name).length).toBeLessThanOrEqual(1);
   });
 
+  it('fetches every built-in feed over https, so nothing on the network can rewrite what the AI reads', () => {
+    expect(BUILTIN_FEEDS.filter(f => !f.url.startsWith('https://')).map(f => `${f.name}: ${f.url}`)).toEqual([]);
+  });
+
   it('every added feed has a tag in its own section, so items never fall into Custom Feeds', () => {
     const tagNames = new Map<string, string>();
     for (const t of [...Object.values(SOURCE_MAP), ...Object.values(YOUTUBE_AUTHORS)]) tagNames.set(t.name, t.category);

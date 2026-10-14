@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { secretStatus } from '../../config/store.js';
 import { EDITABLE, keyStatus, openEnvFile, updateEnvFile, type EditableKey } from '../../secrets.js';
+import { vaultStorage } from '../../vault.js';
 
 const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
 
@@ -13,12 +14,12 @@ function localOnly(req: FastifyRequest) {
 const Updates = z.partialRecord(z.enum(Object.keys(EDITABLE) as [EditableKey, ...EditableKey[]]), z.string().trim().max(2000));
 
 export async function keyRoutes(app: FastifyInstance) {
-  app.get('/keys', async () => ({ keys: keyStatus() }));
+  app.get('/keys', async () => ({ keys: keyStatus(), keyStorage: vaultStorage() }));
 
   app.put('/keys', async req => {
     localOnly(req);
     updateEnvFile(Updates.parse(req.body));
-    return { keys: keyStatus(), secrets: secretStatus() };
+    return { keys: keyStatus(), secrets: secretStatus(), keyStorage: vaultStorage() };
   });
 
   app.post('/keys/open', async req => {

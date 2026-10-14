@@ -6,14 +6,14 @@ import type { FeedResult, Item, RunContext } from '../types.js';
 import { buildFeedList } from './feedList.js';
 import { deadFeedReport, fetchFeeds, type FetchText } from './fetchFeeds.js';
 import { normalize } from './normalize.js';
-import { clusterSameStory, contentFilter, dedupeAndSort, timeWindow, topicFilter } from './filters.js';
+import { clusterSameStory, contentFilter, dedupeAndSort, mergeAcrossCategories, timeWindow, topicFilter } from './filters.js';
 
 export interface IngestResult {
   items: Item[];
   feedResults: FeedResult[];
 }
 
-/** Feed List → RSS Read → Shorts/Promo filter → Normalize & Tag → Time Window → Dedup + Sort → Clustering → Topic Toggles. */
+/** Feed List → RSS Read → Shorts/Promo filter → Normalize & Tag → Time Window → Dedup + Sort → Clustering → Topic Toggles → Cross-category merge. */
 export async function ingest(ctx: RunContext, opts: { fetchText?: FetchText; tries?: number } = {}): Promise<IngestResult> {
   const { config, log } = ctx;
   const { feeds, skippedXCancel } = buildFeedList(config);
@@ -29,6 +29,8 @@ export async function ingest(ctx: RunContext, opts: { fetchText?: FetchText; tri
   const dd = dedupeAndSort(win.items);
   const cl = clusterSameStory(dd.items);
   const tf = topicFilter(cl.items, config);
+  // After the toggles, so a merged story never lands in a section that's switched off.
+  const xc = mergeAcrossCategories(tf.items);
 
   const stats = {
     feedsAttempted: feeds.length,
@@ -45,14 +47,15 @@ export async function ingest(ctx: RunContext, opts: { fetchText?: FetchText; tri
     droppedDuplicates: dd.duplicates,
     mergedIntoClusters: cl.merged,
     droppedTopicOff: tf.dropped,
-    itemsKept: tf.items.length,
+    mergedAcrossCategories: xc.merged,
+    itemsKept: xc.items.length,
   };
   ctx.stats.ingest = stats;
   log.info(stats, 'ingestion complete');
   if (failed.length) log.warn({ dead: failed.map(f => ({ feed: f.feed, code: f.code })) }, `${failed.length} dead feeds`);
 
   recordFeedResults(ctx, results);
-  return { items: tf.items, feedResults: results };
+  return { items: xc.items, feedResults: results };
 }
 
 function recordFeedResults(ctx: RunContext, results: FeedResult[]) {

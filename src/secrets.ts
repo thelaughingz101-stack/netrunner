@@ -1,12 +1,16 @@
-// Editing .env from the Config UI. Secret values go in and never come back out: the UI only gets
+// Editing keys and settings from the Config UI. Secret values go in and never come back out: the UI only gets
 // "set / not set" plus the last 4 characters. Non-secret settings (SMTP host, port, user…) are returned
 // as-is so the form can show them.
 //
-// Only the keys below can be written. Comments and every other line in .env are preserved.
+// Secrets go to the encrypted vault on Windows (vault.ts), to .env elsewhere. Only the keys below can be
+// written. Comments and every other line in .env are preserved.
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
-import path from 'node:path';
+import dotenv from 'dotenv';
 import { reloadEnv, validateEnvUpdate } from './env.js';
+import { applyEnvUpdates, envFile, isVaultKey, setVaultSecrets, vaultActive, writeFileAtomic } from './vault.js';
+
+export { applyEnvUpdates, envFile };
 
 export const EDITABLE = {
   GEMINI_API_KEY: { secret: true },
@@ -22,9 +26,6 @@ export const EDITABLE = {
 } as const;
 export type EditableKey = keyof typeof EDITABLE;
 
-/** The .env dotenv loaded (cwd). NETRUNNER_ENV_FILE points tests at a scratch file. */
-export const envFile = () => process.env.NETRUNNER_ENV_FILE || path.resolve(process.cwd(), '.env');
-
 export interface KeyStatus { set: boolean; hint?: string; value?: string }
 
 /** What the UI may see: never a secret's value, only whether it's set and its last 4 characters. */
@@ -39,29 +40,7 @@ export function keyStatus(): Record<EditableKey, KeyStatus> {
   return out;
 }
 
-// dotenv doesn't unescape \" inside quotes, so values with quotes or line breaks are refused instead.
-const quote = (v: string) => (/[\s#=]/.test(v) ? `"${v}"` : v);
-
-/** Pure: rewrite .env text with the given values ('' clears a key). Unknown lines are untouched. */
-export function applyEnvUpdates(text: string, updates: Partial<Record<EditableKey, string>>): string {
-  const lines = text.split(/\r?\n/);
-  const pending = new Map(Object.entries(updates));
-  for (let i = 0; i < lines.length; i++) {
-    const m = lines[i].match(/^\s*(?:export\s+)?([A-Z0-9_]+)\s*=/);
-    if (m && pending.has(m[1])) {
-      lines[i] = `${m[1]}=${quote(pending.get(m[1])!)}`;
-      pending.delete(m[1]);
-    }
-  }
-  if (pending.size) {
-    if (lines.length && lines[lines.length - 1] !== '') lines.push('');
-    for (const [k, v] of pending) lines.push(`${k}=${quote(v)}`);
-    lines.push('');
-  }
-  return lines.join('\n');
-}
-
-/** Writes the values to .env and applies them to this process right away (no restart needed). */
+/** Saves the values (secrets to the vault when it's on, the rest to .env) and applies them right away. */
 export function updateEnvFile(updates: Partial<Record<EditableKey, string>>): void {
   for (const [k, v] of Object.entries(updates)) {
     if (!(k in EDITABLE)) throw Object.assign(new Error(`${k} can't be edited from the app`), { statusCode: 400 });
@@ -69,11 +48,18 @@ export function updateEnvFile(updates: Partial<Record<EditableKey, string>>): vo
   }
   // e.g. SMTP_PORT "smtp" would make every later env() call throw, and the app wouldn't start again.
   validateEnvUpdate(updates as Record<string, string>);
+  const toVault: Record<string, string> = {};
+  const toEnv: Record<string, string> = {};
+  for (const [k, v] of Object.entries(updates)) (vaultActive() && isVaultKey(k) ? toVault : toEnv)[k] = v ?? '';
   const file = envFile();
   const before = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
-  const tmp = `${file}.tmp`;
-  fs.writeFileSync(tmp, applyEnvUpdates(before, updates), 'utf8');
-  fs.renameSync(tmp, file);
+  if (Object.keys(toVault).length) {
+    setVaultSecrets(toVault);
+    // A plain copy left in .env would win on the next start and undo this save: blank it.
+    const plain = dotenv.parse(before);
+    for (const k of Object.keys(toVault)) if (plain[k]?.trim()) toEnv[k] = '';
+  }
+  if (Object.keys(toEnv).length) writeFileAtomic(file, applyEnvUpdates(before, toEnv));
   for (const [k, v] of Object.entries(updates)) {
     if (v) process.env[k] = v; else delete process.env[k];
   }

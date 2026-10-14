@@ -24,7 +24,11 @@ The setup file:
 
 Scheduled digests are set up the first time you press **Save** in the app. They then run in the background through Windows' own Task Scheduler, even when NetRunner is closed.
 
-Ran into a problem? The setup window explains what to do in plain English. You can always run `Setup NetRunner` again: it's safe, and it also repairs the shortcut if you moved the folder.
+Ran into a problem? The setup window explains what went wrong and what to do, in plain English. You can always run `Setup NetRunner` again: it's safe, and it also repairs the shortcut if you moved the folder.
+
+### Updating to a new version
+
+Download and extract the new zip anywhere (your Downloads folder is fine) and double-click `Setup NetRunner` in it, with NetRunner closed. Setup finds your existing NetRunner and updates it **in place**: your settings, API keys, digests and schedule are kept, and the Desktop icon keeps working. You can delete the extracted download afterwards. Setup won't install an older version over a newer one.
 
 ---
 
@@ -109,7 +113,9 @@ npm run install:desktop      # Windows only: icon + Desktop / Start menu shortcu
 
 ### Settings file (`.env`)
 
-The app's key fields write to `.env` for you. These are the underlying names, if you'd rather edit the file (AI Writer and Delivery both have **Open .env** / **Show in folder** links).
+The app's key fields save these for you. These are the underlying names, if you'd rather edit the file (AI Writer and Delivery both have **Open .env** / **Show in folder** links).
+
+On Windows, the secrets (`GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, `DISCORD_WEBHOOK_URL`, `SMTP_PASS`) aren't kept in `.env`. They're encrypted (AES-256-GCM) in `secrets.enc` in the data folder, and the key that unlocks them is held by your PC's TPM chip, or by Windows DPAPI if there's no TPM. Nothing to type and no password to remember, but only your Windows account on this PC can read them, so a copied or synced file is useless. A key typed into `.env` by hand is moved in on the next start. If the TPM is ever reset, the app tells you when it opens; enter your keys again. Docker and Linux use `.env` or Docker secrets (see [Docker](#docker)).
 
 | On screen | `.env` name |
 |---|---|
@@ -150,6 +156,8 @@ docker compose up -d --build     # data persists in ./data
 ```
 
 The image is multi-arch (amd64/arm64), so it also runs on a Raspberry Pi. For an Ollama instance on the host, see `OLLAMA_URL` in `docker-compose.yml`.
+
+A container has no TPM to lock keys with, so on Docker you can keep them out of `.env` with **Docker secrets** instead: put each key alone in a file under `./secrets/` (ignored by git and the image build; `chmod 600` it), and point NetRunner at it with `<KEY>_FILE`, e.g. `GEMINI_API_KEY_FILE=/run/secrets/gemini_api_key`. The commented block in `docker-compose.yml` shows the wiring. Works for `GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, `DISCORD_WEBHOOK_URL` and `SMTP_PASS`. A key set directly still wins over its `_FILE`.
 
 ### How a run works
 
@@ -218,7 +226,8 @@ src/
   index.ts            npm start                cli.ts            npm run digest + scheduled jobs
   desktop.ts          desktop app window       scheduler.ts      jobs from config
   schedule/windows.ts Task Scheduler sync      server/start.ts   boot (shared)
-  env.ts              .env schema              secrets.ts        in-app .env editing
+  env.ts              .env schema              secrets.ts        in-app key / .env editing
+  vault.ts            encrypted secrets (TPM / DPAPI)
   config/             zod schema + SQLite store
   catalog/            feed list + source maps (generated verbatim from n8n) + extras
   pipeline/

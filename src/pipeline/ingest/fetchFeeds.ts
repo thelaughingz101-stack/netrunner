@@ -61,7 +61,7 @@ async function fetchOne(feed: FeedToFetch, fetchText: FetchText, timeoutMs: numb
 export async function fetchFeeds(
   feeds: FeedToFetch[],
   log: Logger,
-  opts: { fetchText?: FetchText; timeoutMs?: number; concurrency?: number; tries?: number } = {},
+  opts: { fetchText?: FetchText; timeoutMs?: number; concurrency?: number; tries?: number; onProgress?: (done: number, total: number) => void } = {},
 ): Promise<{ articles: RawArticle[]; results: FeedResult[] }> {
   const e = env();
   const limit = pLimit(opts.concurrency ?? e.FEED_CONCURRENCY);
@@ -78,6 +78,7 @@ export async function fetchFeeds(
     return hostLimits.get(host)!;
   };
 
+  let done = 0;
   const settled = await Promise.all(feeds.map(feed => perHost(feed.url)(() => limit(async () => {
     try {
       const items = await fetchOne(feed, fetchText, timeoutMs, tries);
@@ -86,6 +87,8 @@ export async function fetchFeeds(
       const code = err instanceof HttpError ? err.status : (err as Error).name === 'TimeoutError' ? 'timeout' : 'error';
       log.debug({ feed: feed.name, url: feed.url, code }, 'feed failed');
       return { feed, items: [] as RawArticle[], result: { feed: feed.name, url: feed.url, status: 'error', itemCount: 0, code, error: (err as Error).message } as FeedResult };
+    } finally {
+      opts.onProgress?.(++done, feeds.length);
     }
   }))));
 

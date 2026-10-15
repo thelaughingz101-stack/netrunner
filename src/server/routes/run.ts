@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { LOOKBACKS } from '../../config/schema.js';
-import { currentRun, run, runPrompt } from '../../pipeline/run.js';
+import { currentRun, run, runPrompt, runStatus } from '../../pipeline/run.js';
 import { getRun, listRuns } from '../../pipeline/runs.js';
 import { nextRuns } from '../../scheduler.js';
 
@@ -26,6 +26,8 @@ export async function runRoutes(app: FastifyInstance) {
     return runPrompt({ trigger: 'api', ...body, forceMode: body.forceMode === 'morning' || body.forceMode === 'nightly' ? body.forceMode : undefined });
   });
 
+  // Polled by the Run button: the run in progress (from this app or Task Scheduler) and its current step.
+  app.get('/run/status', async () => ({ running: runStatus() }));
   app.get('/runs', async () => ({ running: currentRun(), next: await nextRuns(), runs: listRuns() }));
   app.get<{ Params: { id: string } }>('/runs/:id', async (req, reply) => getRun(req.params.id) ?? reply.code(404).send({ error: 'not found' }));
 }

@@ -6,6 +6,7 @@ import type { Logger } from '../../logger.js';
 import { claudeProvider } from './claude.js';
 import { geminiProvider } from './gemini.js';
 import { ollamaProvider } from './ollama.js';
+import { allFailedMessage, type AttemptStart } from './explain.js';
 import { LLMError, type AttemptLog, type LLMRequest, type LLMResult, type Provider, type ProviderOutput, type Tier } from './types.js';
 
 export { LLMError };
@@ -17,12 +18,15 @@ export interface EngineOptions {
   retryDelayMs?: number;
   timeoutMs?: number;
   sleep?: (ms: number) => Promise<void>;
+  /** Called as each attempt starts (the app shows it on the Run button, see explain.ts attemptStage). */
+  onAttempt?: (a: AttemptStart) => void;
 }
 
+/** Shown to the user (plain words, one line per AI); the raw errors are in `attempts`, the log and the run's stats. */
 export class AllTiersFailedError extends Error {
   statusCode = 502; // upstream (LLM) failure, surfaced as-is to the UI
-  constructor(public attempts: AttemptLog[]) {
-    super(`all LLM tiers failed: ${attempts.filter(a => !a.ok).map(a => `${a.tier}#${a.attempt} ${a.skipped ?? a.error}`).join(' | ')}`);
+  constructor(public attempts: AttemptLog[], kind: LLMRequest['kind'] = 'digest') {
+    super(allFailedMessage(attempts, kind));
     this.name = 'AllTiersFailedError';
   }
 }
@@ -54,6 +58,7 @@ export async function generate(req: LLMRequest, config: Config, log: Logger, opt
 
   const attempts: AttemptLog[] = [];
   let truncatedFallback: { tier: Tier; out: ProviderOutput } | null = null;
+  let firstTried: Tier | undefined;
 
   for (const tier of tierOrder(config)) {
     const p = providers[tier];
@@ -66,6 +71,9 @@ export async function generate(req: LLMRequest, config: Config, log: Logger, opt
     for (let attempt = 1; attempt <= tries; attempt++) {
       const t0 = Date.now();
       const signal = AbortSignal.timeout(timeoutMs);
+      firstTried ??= tier;
+      const previous = attempts.filter(a => !a.ok && !a.skipped).at(-1);
+      opts.onAttempt?.({ tier, attempt, of: tries, kind: req.kind, ...(tier !== firstTried ? { fallbackFrom: firstTried } : {}), ...(previous ? { previous } : {}) });
       try {
         const out = await p.call(req, signal);
         const rec: AttemptLog = { tier, attempt, ok: true, ms: Date.now() - t0, finishReason: out.finishReason };
@@ -99,5 +107,5 @@ export async function generate(req: LLMRequest, config: Config, log: Logger, opt
     log.warn({ tier, kind: req.kind }, 'no tier finished cleanly — shipping truncated output with warning banner');
     return { tier, model: out.model, text: truncationBanner(tier, out.text), finishReason: out.finishReason, truncated: true, attempts };
   }
-  throw new AllTiersFailedError(attempts);
+  throw new AllTiersFailedError(attempts, req.kind);
 }

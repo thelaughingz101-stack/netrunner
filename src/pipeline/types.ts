@@ -62,4 +62,6 @@ export interface RunContext {
   today: string;
   log: Logger;
   stats: Record<string, unknown>;
+  /** Records the current step ("Fetching sources (3 of 112)") for the app's Run button. */
+  progress?: (stage: string) => void;
 }

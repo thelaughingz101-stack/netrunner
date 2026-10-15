@@ -20,7 +20,7 @@ describe('netrunner-config.html', () => {
   });
 
   it('calls every API endpoint the server exposes for it', () => {
-    for (const ep of ['/api/config', '/api/run', '/api/prompt', '/api/digests', '/api/health', '/api/resolve-youtube']) {
+    for (const ep of ['/api/config', '/api/run', '/api/run/status', '/api/prompt', '/api/digests', '/api/health', '/api/resolve-youtube']) {
       expect(src, ep).toContain(ep);
     }
     expect(html).toContain('/api/catalog');
@@ -40,5 +40,30 @@ describe('netrunner-config.html', () => {
 
   it('loads only vendored scripts', () => {
     expect(html).not.toMatch(/<script[^>]+src="https?:/);
+  });
+});
+
+describe('uniformity pass (Oct 2026)', () => {
+  it('is a dashboard, not a wizard: no Back / Next / Finish, one connection indicator', () => {
+    for (const gone of ['← Back', 'Next →', 'Finish ✓', 'Connected to local server', 'goNext', 'goPrev']) expect(src, gone).not.toContain(gone);
+    expect(src).toContain('server offline: reopen NetRunner');
+  });
+
+  it('Save and Undo follow unsaved changes; Schedule says when edits are not scheduled yet', () => {
+    expect(src).toContain('Unsaved changes');
+    expect(src).toMatch(/disabled=\{!dirty\}/);
+    expect(src).toMatch(/disabled=\{!canSave\}/);
+    expect(src).toContain('Not scheduled yet');
+  });
+
+  it('the Excluded list toggle lives in one place, without icon prefixes', () => {
+    expect(src.match(/format\.showExcluded", v\)/g)).toHaveLength(1);
+    expect(src).not.toMatch(/label="(📋|🗒️) /);
+  });
+
+  it('shows full source names and the running digest step on hover', () => {
+    expect(src).toContain('LABELS[src] || src');
+    expect(src).toContain('function RunButton');
+    expect(src).not.toContain('<ActionBar />');
   });
 });

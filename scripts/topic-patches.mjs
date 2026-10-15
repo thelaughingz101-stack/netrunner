@@ -13,12 +13,13 @@ function searchTasks(nightly) {
   if (on('US Politics')) tasks.push(nightly ? 'Breaking US political news since this morning (verified sources only)' : 'Overnight US political news (verified sources only)');
   if (on('Business & Finance')) tasks.push(nightly ? 'How S&P 500, Nasdaq, Dow closed today (use real closing numbers)' : 'Premarket conditions today (use real numbers from a live search)');
   const announced = [];
-  if (on('Gaming') || on('Media Announcements')) announced.push('game');
-  if (on('TV & Movies') || on('Media Announcements')) announced.push('movie', 'TV show');
-  if (on('Anime') || on('Media Announcements')) announced.push('anime');
+  if (on('Gaming')) announced.push('game');
+  if (on('TV & Movies')) announced.push('movie', 'TV show');
+  if (on('Anime')) announced.push('anime');
   if (announced.length) tasks.push('Any OFFICIALLY announced ' + announced.join(', ').replace(/, ([^,]*)$/, ', or $1') + ' news ' + when + ' (press releases and official sources only)');
   if (on('Comics')) tasks.push((nightly ? 'New' : 'Upcoming') + ' comic book releases this Wednesday (NCBD) — search each publisher separately: DC Comics, Marvel Comics, Image Comics, Boom Studios, Dark Horse Comics, Dynamite Entertainment, IDW Publishing, Indie publishers. Only list issues you can verify from ComicList, AIPT, CBR, or publisher websites.');
   if (on('Science & Space')) tasks.push('Science and space discoveries or announcements ' + when + ' (NASA, Phys.org, Space.com, ESA)');
+  if (on('Health')) tasks.push('Public health news ' + when + ' (official WHO, CDC, FDA, NIH and ECDC announcements only)');
   if (on('Anime')) tasks.push('Anime news ' + when + ' (Anime News Network, Crunchyroll, Funimation, official studio sources only)');
   if (on('Animation')) tasks.push('Western animation news ' + when + ' (Adult Swim, Cartoon Network, Netflix Animation, official sources only)');
   if (on('Security')) tasks.push('Cybersecurity incidents ' + when + ' at state/federal level OR affecting a major company mentioned in this digest (Krebs on Security, TorrentFreak, verified outlets only)');
@@ -62,6 +63,30 @@ export const PAYLOAD_TOPIC_PATCHES = [
     why: 'Search results for disabled topics were landing in Everything Else.',
     from: "- Place search-sourced items in their best-fit topic section alongside feed items — that's expected and good.",
     to: "- Place search-sourced items in their best-fit topic section alongside feed items — that's expected and good.\n- Search-sourced items go ONLY in topic sections listed in REQUIRED HEADER ORDER — never in 📋 Everything Else, and never for a topic that isn't listed there (the user turned it off).",
+  },
+  {
+    id: 'media-merged-order-payload',
+    why: 'Media Announcements was folded into TV & Movies (its four studio channels moved there): no longer a section.',
+    from: "'TV & Movies','Media Announcements','Anime',",
+    to: "'TV & Movies','Anime',",
+  },
+  {
+    id: 'media-merged-header-payload',
+    why: 'Media Announcements folded into TV & Movies: its header goes.',
+    from: "  'Media Announcements':  '🎙️ Media Announcements',\n",
+    to: '',
+  },
+  {
+    id: 'health-order-payload',
+    why: 'Health topic (added in NetRunner, not in n8n): its place in the default section order, after Science & Space.',
+    from: "'Animation','Science & Space',\n",
+    to: "'Animation','Science & Space','Health',\n",
+  },
+  {
+    id: 'health-header-payload',
+    why: 'Health topic: its section header.',
+    from: "  'Science & Space':      '🔭 Science & Space',\n",
+    to: "  'Science & Space':      '🔭 Science & Space',\n  'Health':               '🩺 Health',\n",
   },
   {
     id: 'topics-comics-rules-payload',
@@ -113,6 +138,31 @@ export function exporterTopicPatches(name) {
       why: 'Leaks & Rumors was always included (and listed twice); it now comes from the toggles, once.',
       from: LEAKS_RULE + '\n- 🗒️ EXCLUDED',
       to: '- 🗒️ EXCLUDED',
+    },
+    {
+      id: 'media-merged-emoji',
+      why: 'Media Announcements was folded into TV & Movies (its four studio channels moved there): no longer a section.',
+      from: "'TV & Movies':'🎬','Media Announcements':'🎙️',\n",
+      to: "'TV & Movies':'🎬',\n",
+    },
+    {
+      id: 'media-merged-rule',
+      why: 'Media Announcements folded into TV & Movies: its section rule goes.',
+      from: "  'Media Announcements': `- 🎙️ Media Announcements — any officially announced game / movie / show / anime.`,\n",
+      to: '',
+    },
+    {
+      id: 'health-emoji',
+      why: 'Health topic (added in NetRunner, not in n8n): its emoji, and its place in the default order after Science & Space.',
+      from: "'Science & Space':'🔭',\n",
+      to: "'Science & Space':'🔭','Health':'🩺',\n",
+    },
+    {
+      id: 'health-rule',
+      why: 'Health topic: its section rule.',
+      from: "  'Science & Space': `- 🔭 Science & Space — NASA, ESA, Phys.org, Space.com, or peer-reviewed.`,\n",
+      to: "  'Science & Space': `- 🔭 Science & Space — NASA, ESA, Phys.org, Space.com, or peer-reviewed.`,\n"
+        + "  'Health': `- 🩺 Health — official public-health bodies (WHO, CDC, FDA, NIH, ECDC) or peer-reviewed research: outbreaks, recalls, safety alerts, guidance. Report what the agency said; no medical advice.`,\n",
     },
     {
       id: 'topics-headers-bf',

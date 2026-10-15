@@ -87,4 +87,10 @@ export const MIGRATIONS: string[] = [
     started_at TEXT NOT NULL
   );
   `,
+  /* 3 */ `
+  -- What the lock holder is doing right now ("Morning digest" / "Fetching sources (3 of 112)"), shown on
+  -- the app's Run button for runs started from the app or by Task Scheduler.
+  ALTER TABLE run_lock ADD COLUMN title TEXT;
+  ALTER TABLE run_lock ADD COLUMN stage TEXT;
+  `,
 ];

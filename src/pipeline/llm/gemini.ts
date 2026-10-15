@@ -1,8 +1,9 @@
 // Port of n8n "Gemini API Call" (HTTP node) + "Parse Response".
 import { env } from '../../env.js';
+import { llmFetch, networkDetail } from './http.js';
 import { LLMError, type Provider } from './types.js';
 
-export function geminiProvider(fetchImpl: typeof fetch = fetch): Provider {
+export function geminiProvider(fetchImpl: typeof fetch = llmFetch): Provider {
   return {
     tier: 'gemini',
     unavailable: () => (env().GEMINI_API_KEY ? null : 'GEMINI_API_KEY not set'),
@@ -19,7 +20,7 @@ export function geminiProvider(fetchImpl: typeof fetch = fetch): Provider {
           body: JSON.stringify(req.prompt.geminiBody), // body is exactly what Build LLM Payload produced
         });
       } catch (err) {
-        throw new LLMError(`gemini network error: ${(err as Error).message}`, true);
+        throw new LLMError(`gemini network error: ${networkDetail(err)}`, true);
       }
       if (!res.ok) {
         const body = (await res.text()).slice(0, 300);

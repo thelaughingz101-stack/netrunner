@@ -1,20 +1,31 @@
 import { FEEDS } from './feeds.generated.js';
-import { EXTRA_FEEDS, FEED_OVERRIDES } from './feeds.extra.js';
-import { SOURCE_MAP as GEN_SOURCE_MAP, YOUTUBE_AUTHORS as GEN_YT, XCANCEL_USERS, PER_SOURCE_CAP } from './sourceMap.generated.js';
+import { EXTRA_FEEDS, FEED_OVERRIDES, SOURCE_LABELS } from './feeds.extra.js';
+import { SOURCE_MAP as GEN_SOURCE_MAP, YOUTUBE_AUTHORS as GEN_YT, XCANCEL_USERS as GEN_XCANCEL, PER_SOURCE_CAP } from './sourceMap.generated.js';
 import { EXTRA_SOURCE_MAP, EXTRA_YOUTUBE_AUTHORS } from './sourceMap.extra.js';
 import type { FeedDef, FeedKind, SourceTag } from './types.js';
 
 export type { FeedDef, FeedKind, SourceTag };
-export { XCANCEL_USERS, PER_SOURCE_CAP };
+export { PER_SOURCE_CAP };
+
+/**
+ * Topics folded into another one: the generated (n8n) feeds and tags still name the old topic, and saved
+ * configs drop it (normalizeConfig). Media Announcements was four Disney/DC trailer channels, the same kind
+ * of source TV & Movies already had.
+ */
+export const MERGED_TOPICS: Record<string, string> = { 'Media Announcements': 'TV & Movies' };
+const merged = <T extends { category: string }>(x: T): T =>
+  x.category in MERGED_TOPICS ? { ...x, category: MERGED_TOPICS[x.category] } : x;
+const mergedMap = (m: Record<string, SourceTag>) => Object.fromEntries(Object.entries(m).map(([k, t]) => [k, merged(t)]));
 
 const patched = FEEDS.flatMap(f => {
-  if (!(f.name in FEED_OVERRIDES)) return [f];
+  if (!(f.name in FEED_OVERRIDES)) return [merged(f)];
   const o = FEED_OVERRIDES[f.name];
-  return o === null ? [] : [{ ...f, ...o }];
+  return o === null ? [] : [merged({ ...f, ...o })];
 });
 export const BUILTIN_FEEDS: FeedDef[] = [...patched, ...EXTRA_FEEDS];
-export const SOURCE_MAP: Record<string, SourceTag> = { ...GEN_SOURCE_MAP, ...EXTRA_SOURCE_MAP };
-export const YOUTUBE_AUTHORS: Record<string, SourceTag> = { ...GEN_YT, ...EXTRA_YOUTUBE_AUTHORS };
+export const SOURCE_MAP: Record<string, SourceTag> = { ...mergedMap(GEN_SOURCE_MAP), ...EXTRA_SOURCE_MAP };
+export const YOUTUBE_AUTHORS: Record<string, SourceTag> = { ...mergedMap(GEN_YT), ...EXTRA_YOUTUBE_AUTHORS };
+export const XCANCEL_USERS: Record<string, SourceTag> = mergedMap(GEN_XCANCEL);
 
 /** The key `config.sources` toggles on — same rule as n8n's Feed List: sourceKey || name. */
 export const toggleKey = (f: Pick<FeedDef, 'name' | 'sourceKey'>) => f.sourceKey || f.name;
@@ -32,9 +43,9 @@ export function feedKind(url: string): FeedKind {
  * missing from the n8n-era UI, so they couldn't be switched off (see CHANGES_FROM_N8N.md).
  */
 export const TOPICS: string[] = [
-  'Gaming', 'TV & Movies', 'Media Announcements', 'Anime', 'Animation',
+  'Gaming', 'TV & Movies', 'Anime', 'Animation',
   'Tech & Hardware', 'AI & LLMs', 'US Politics', 'World News', 'Business & Finance',
-  'Science & Space', 'Security', 'Comics', 'Notable Trends', 'Blindspot Analysis',
+  'Science & Space', 'Health', 'Security', 'Comics', 'Notable Trends', 'Blindspot Analysis',
   'Leaks & Rumors', 'Custom Feeds',
 ];
 
@@ -42,6 +53,8 @@ export interface UiCatalog {
   topics: string[];
   /** category → kind → toggle keys (the shape netrunner-config.html's SOURCES object had) */
   sources: Record<string, Partial<Record<FeedKind, string[]>>>;
+  /** toggle key → full name, for sources known by an abbreviation (Sources tab only) */
+  labels: Record<string, string>;
   feedCount: number;
 }
 
@@ -57,7 +70,7 @@ export function uiCatalog(): UiCatalog {
     }
     if (Object.keys(byKind).length) sources[topic] = byKind;
   }
-  return { topics: TOPICS, sources, feedCount: BUILTIN_FEEDS.length };
+  return { topics: TOPICS, sources, labels: SOURCE_LABELS, feedCount: BUILTIN_FEEDS.length };
 }
 
 /** Every distinct toggle key across the catalog. */

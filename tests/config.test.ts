@@ -51,6 +51,35 @@ describe('config layer', () => {
     expect(paths).toContain('schedule.timezone');
   });
 
+  it('drops Media Announcements (folded into TV & Movies) from saved topics and section order', async () => {
+    const app = await buildApp();
+    const put = await app.inject({ method: 'PUT', url: '/api/config', payload: {
+      topics: { 'Media Announcements': true, 'TV & Movies': true },
+      format: { sectionOrder: ['TV & Movies', 'Media Announcements', 'Gaming'] },
+    } });
+    const saved = put.json().config;
+    expect(saved.topics).not.toHaveProperty('Media Announcements');
+    expect(saved.format.sectionOrder).not.toContain('Media Announcements');
+    expect(saved.format.sectionOrder.filter((t: string) => t === 'TV & Movies' || t === 'Gaming')).toEqual(['TV & Movies', 'Gaming']);
+  });
+
+  it('a new topic joins a saved section order next to its neighbour, not at the very end', async () => {
+    const app = await buildApp();
+    const old = TOPICS.filter(t => t !== 'Health' && t !== 'Custom Feeds').reverse(); // a customised order without Health
+    const put = await app.inject({ method: 'PUT', url: '/api/config', payload: { format: { sectionOrder: old } } });
+    const order: string[] = put.json().config.format.sectionOrder;
+    expect(order.indexOf('Health')).toBe(order.indexOf('Science & Space') + 1);
+    expect(order.filter(t => t !== 'Health')).toEqual(old);
+  });
+
+  it('Custom Feeds is in the section order exactly when there are custom sources (so opening Format changes nothing)', async () => {
+    const app = await buildApp();
+    const put = (customSources: object, sectionOrder: string[]) =>
+      app.inject({ method: 'PUT', url: '/api/config', payload: { customSources, format: { sectionOrder } } }).then(r => r.json().config.format.sectionOrder as string[]);
+    expect(await put({ rss: ['https://example.com/feed.xml'] }, ['Gaming'])).toContain('Custom Feeds');
+    expect(await put({ rss: [] }, ['Gaming', 'Custom Feeds'])).not.toContain('Custom Feeds');
+  });
+
   it('never lists the primary engine in its own fallback chain', async () => {
     const app = await buildApp();
     const put = await app.inject({ method: 'PUT', url: '/api/config', payload: { llm: { primary: 'claude', fallbackChain: ['claude', 'gemini', 'gemini', 'ollama'] } } });

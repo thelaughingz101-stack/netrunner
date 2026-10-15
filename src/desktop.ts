@@ -10,9 +10,13 @@
 import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { isNativeBuildError } from './db/db.js';
 import { dataDir, env, EnvError } from './env.js';
 import { log } from './logger.js';
 import { startServer } from './server/start.js';
+
+const appDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 const openArg = process.argv.indexOf('--open');
 /** Only a same-origin path is accepted, never a full URL. */
@@ -104,7 +108,9 @@ main().catch(err => {
     ? `NetRunner could not start because a setting in .env has a value it can't use:\n\n${err.issues.map(i => `${i.key}: ${i.message}`).join('\n')}\n\nFix it in .env (in the NetRunner folder) and open NetRunner again.`
     : (err as NodeJS.ErrnoException).code === 'EADDRINUSE'
       ? `Port ${env().PORT} is already in use by another program. Close it, or set PORT in .env.`
-      : `NetRunner could not start:\n\n${(err as Error).message}\n\nDetails are in data\\logs\\netrunner.log.`;
+      : isNativeBuildError(err)
+        ? `NetRunner could not start because its database engine isn't installed for this version of Node.js (${process.version}). That happens when Setup didn't finish, or after Node.js was updated.\n\nTo repair it, double-click "Setup NetRunner" in the NetRunner folder:\n${appDir}`
+        : `NetRunner could not start:\n\n${(err as Error).message}\n\nDetails are in data\\logs\\netrunner.log.`;
   log.fatal({ err }, 'desktop app failed to start');
   messageBox(msg);
   setTimeout(() => process.exit(1), 500);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BUILTIN_FEEDS, SOURCE_MAP, TOPICS, YOUTUBE_AUTHORS, feedKind, uiCatalog } from '../src/catalog/index.js';
+import { BUILTIN_FEEDS, SOURCE_MAP, TOPICS, XCANCEL_USERS, YOUTUBE_AUTHORS, feedKind, uiCatalog } from '../src/catalog/index.js';
 import { EXTRA_FEEDS, FEED_OVERRIDES } from '../src/catalog/feeds.extra.js';
 import { isTransient } from '../src/pipeline/ingest/fetchFeeds.js';
 import { tagSource } from '../src/pipeline/ingest/normalize.js';
@@ -53,6 +53,51 @@ describe('catalog additions and fixes', () => {
     expect(gnews('https://www.reuters.com')).toMatchObject({ name: 'Reuters' });
     expect(gnews('https://en.wikipedia.org')).toMatchObject({ name: 'Wikipedia', category: 'Notable Trends' });
     expect(tagSource({ link: 'https://news.google.com/rss/articles/CBMi' }).src.name).toBe('Google News');
+  });
+
+  it('Health: official public-health bodies, each item tagged to its agency', () => {
+    expect(TOPICS).toContain('Health');
+    const tag = (link: string, source?: string) => tagSource({ link, ...(source ? { source: [{ _: 'x', $: { url: source } }] } : {}) }).src;
+    expect(tag('https://news.google.com/rss/articles/CBMi?oc=5', 'https://www.who.int')).toEqual({ name: 'WHO', category: 'Health' });
+    expect(tag('https://news.google.com/rss/articles/CBMi?oc=5', 'https://www.nih.gov')).toEqual({ name: 'NIH', category: 'Health' });
+    expect(tagSource({ link: 'https://www.youtube.com/watch?v=x', author: 'World Health Organization (WHO)' }).src).toEqual({ name: 'WHO', category: 'Health' });
+    expect(tag('https://www.paho.org/en/news/9-10-2026-paho-assesses-risk')).toEqual({ name: 'PAHO', category: 'Health' });
+    // CDC's feeds link through tools.cdc.gov; MMWR gets its own name (and its own per-source cap).
+    expect(tag('https://tools.cdc.gov/api/embed/downloader/download.asp?m=132608&c=766495')).toEqual({ name: 'CDC', category: 'Health' });
+    expect(tag('https://tools.cdc.gov/api/embed/downloader/download.asp?m=342778&c=766617')).toEqual({ name: 'CDC MMWR', category: 'Health' });
+    expect(tag('http://www.fda.gov/news-events/press-announcements/fda-launches-x')).toEqual({ name: 'FDA', category: 'Health' });
+    expect(tag('http://www.fda.gov/safety/recalls-market-withdrawals-safety-alerts/x')).toEqual({ name: 'FDA Recalls', category: 'Health' });
+    expect(tag('https://www.hhs.gov/press-room/x.html')).toEqual({ name: 'HHS', category: 'Health' });
+    expect(tag('https://www.ecdc.europa.eu/en/news-events/x')).toEqual({ name: 'ECDC', category: 'Health' });
+    expect(uiCatalog().sources.Health).toEqual({
+      RSS: ['WHO', 'PAHO', 'CDC', 'CDC MMWR', 'FDA', 'FDA Recalls', 'NIH', 'HHS', 'ECDC'],
+      YouTube: ['WHO'],
+    });
+  });
+
+  it('Media Announcements is folded into TV & Movies, which now covers every major studio', () => {
+    expect(TOPICS).not.toContain('Media Announcements');
+    expect(BUILTIN_FEEDS.filter(f => f.category === 'Media Announcements')).toEqual([]);
+    const tags = [...Object.values(SOURCE_MAP), ...Object.values(YOUTUBE_AUTHORS), ...Object.values(XCANCEL_USERS)];
+    expect(tags.filter(t => !TOPICS.includes(t.category))).toEqual([]);
+    for (const author of ['DC', 'Star Wars', 'Marvel Entertainment', 'Pixar', 'Universal Pictures', 'Sony Pictures Entertainment', 'Paramount Pictures', 'Lionsgate Movies']) {
+      expect(tagSource({ link: 'https://www.youtube.com/watch?v=x', author }).src.category, author).toBe('TV & Movies');
+    }
+    expect(tagSource({ link: 'https://www.hollywoodreporter.com/movies/x/' }).src).toEqual({ name: 'Hollywood Reporter', category: 'TV & Movies' });
+    const tv = uiCatalog().sources['TV & Movies'];
+    for (const k of ['DC', 'Star Wars', 'Marvel Entertainment', 'Pixar', 'Universal Pictures', 'Sony Pictures', 'Paramount Pictures', 'Lionsgate']) expect(tv?.YouTube, k).toContain(k);
+    expect(tv?.RSS).toContain('Hollywood Reporter');
+  });
+
+  it('the Sources tab spells out abbreviated names; every label belongs to a real source', () => {
+    const { labels } = uiCatalog();
+    expect(labels.WHO).toBe('World Health Organization (WHO)');
+    expect(labels['CDC MMWR']).toBe('CDC Morbidity and Mortality Weekly Report (MMWR)');
+    expect(labels.EFF).toBe('Electronic Frontier Foundation (EFF)');
+    const keys = new Set(BUILTIN_FEEDS.map(f => f.sourceKey || f.name));
+    for (const k of Object.keys(labels)) expect(keys.has(k), k).toBe(true);
+    // Every Health source is an agency abbreviation, so each one needs its full name.
+    for (const k of Object.values(uiCatalog().sources.Health ?? {}).flat()) expect(labels[k], k).toBeTruthy();
   });
 
   it('retries rate limits and YouTube 404 blips, but not ordinary 404s', () => {

@@ -35,6 +35,7 @@
     "react-dom": "18.3.1",
     "rss-parser": "^3.13.0",
     "tsx": "^4.20.6",
+    "undici": "^7.30.1",
     "zod": "^4.1.12"
   },
   "devDependencies": {
@@ -44,5 +45,9 @@
     "@types/nodemailer": "^8.0.2",
     "typescript": "^5.9.3",
     "vitest": "^4.0.3"
+  },
+  "allowScripts": {
+    "better-sqlite3": true,
+    "esbuild": true
   }
 }

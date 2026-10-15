@@ -9,16 +9,16 @@ You pick the topics and sources. An AI (Google Gemini, Claude, or a local Ollama
 ## Quick start (Windows, no technical knowledge needed)
 
 1. **Download NetRunner.** Open the [latest release](../../releases/latest) and click **NetRunner-vX.Y.Z.zip** under *Assets*.
-2. **Extract it.** Right-click the downloaded zip → **Extract All…** → choose a folder you'll keep, for example `Documents\NetRunner`.
-   NetRunner runs from this folder, so don't run it from inside the zip and don't delete the folder afterwards.
+2. **Extract it.** Right-click the downloaded zip → **Extract All…** (anywhere is fine, your Downloads folder included). Don't run it from inside the zip.
 3. **Double-click `Setup NetRunner`** in the extracted folder.
    - If Windows shows a security warning, click **More info → Run anyway** (or **Run**).
    - If Windows asks for permission to install **Node.js**, click **Yes**.
-4. Wait until the window says **DONE** (usually a few minutes). NetRunner then opens by itself.
+   - When Setup asks **where NetRunner should live**, press **Enter** for the suggested folder (`C:\Users\<you>\NetRunner`), press **B** to pick another folder, or paste a folder path. Avoid OneDrive, Google Drive and Dropbox folders: syncing slows NetRunner down (Setup warns you).
+4. Wait until the window says **DONE** (usually a few minutes). NetRunner then opens by itself. You can delete the extracted download.
 
 The setup file:
 - installs **Node.js** (the engine NetRunner runs on) if your PC doesn't have it,
-- installs everything else NetRunner needs,
+- puts NetRunner in the folder you chose and installs everything else it needs,
 - adds a **NetRunner** icon to your Desktop and Start menu,
 - opens NetRunner.
 
@@ -67,21 +67,23 @@ You only need a key for the AI you actually use. Changes take effect immediately
 
 | Tab | What you set there |
 |---|---|
-| **Start** | Ready-made starting setups. |
+| **Start** | Ready-made starting setups (the one matching your settings is marked *Current*), plus export/import of your settings. |
 | **Topics** | Which topics appear. The **Catch-all sections** card at the bottom switches the *Everything Else* and *Excluded list* sections on or off. |
-| **Sources** | Individual sites and channels per topic. *Skip filler* drops YouTube Shorts and promo clips. *Add your own* takes any RSS feed or YouTube channel. |
+| **Sources** | Individual sites and channels per topic, with full names (e.g. *Centers for Disease Control and Prevention (CDC)*). *Skip filler* drops YouTube Shorts and promo clips. *Add your own* takes any RSS feed or YouTube channel. |
 | **Format** | Summary length (1 sentence, 2–3, or full), language, and section order. |
 | **AI Writer** | Autopilot or Free Copy-Paste, which AI to use first, backups if it fails, and your keys. |
 | **Schedule** | Turn automatic digests on or off, times, timezone, how far back to look, and weekly/monthly recaps. |
 | **Delivery** | Discord, email, save to file, and *Open in NetRunner* (opens the app on each new scheduled digest). |
 | **Output** | Every digest NetRunner has made, ready to read. |
 
+The bar at the bottom has **Run News Digest**, **Undo changes** and **Save**. Save lights up (and *Unsaved changes* shows) only when something on screen differs from your saved settings. While a digest runs, from the button or the schedule, hover **Running…** to see what it's doing (e.g. *Fetching sources (64 of 112)*, *Writing the digest with Gemini*).
+
 ---
 
 ## Troubleshooting & known issues
 
 **NetRunner won't open, or a digest never arrived:**
-- Run `Setup NetRunner` again (safe to repeat).
+- Run `Setup NetRunner` again (safe to repeat). If a message says the *database engine* isn't installed (after a Node.js update, for example), run it from inside your NetRunner folder: that rebuilds it.
 - Check **Schedule → Next runs** to see when the next digest is due.
 - Scheduled digests need you to be logged in to Windows. A run missed while the PC was off starts when it's back on.
 - Details of every run are in `data\logs\netrunner.log` in the NetRunner folder.
@@ -109,7 +111,9 @@ cp .env.example .env         # Windows: copy .env.example .env
 npm run install:desktop      # Windows only: icon + Desktop / Start menu shortcuts
 ```
 
-`Setup NetRunner.cmd` runs the same steps. Add `--no-shortcuts` to install without creating shortcuts or opening the app.
+`Setup NetRunner.cmd` runs the same steps. Add `--no-shortcuts` to install in place without asking for a folder, creating shortcuts or opening the app.
+
+npm 12 skips dependency install scripts unless `package.json`'s `allowScripts` lists them, so a new dependency with a native build (like better-sqlite3) needs `npm approve-scripts <pkg>`. `tests/install-scripts.test.ts` fails until it's listed.
 
 ### Settings file (`.env`)
 

@@ -92,6 +92,15 @@ describe('LLM fallback chain', () => {
     expect(r.attempts.filter(a => !a.ok)).toHaveLength(6);
   });
 
+  it('reports every attempt as it starts, naming the tier it fell back from (the Run button hover)', async () => {
+    const g = scripted('gemini', [new LLMError('500', true, 500), new LLMError('400 bad request', false, 400)]);
+    const c = scripted('claude', [ok('fine')]);
+    const seen: string[] = [];
+    await generate(req, cfg('gemini', ['claude']), log, { ...noSleep, providers: { gemini: g.p, claude: c.p },
+      onAttempt: a => seen.push(`${a.kind} ${a.tier}#${a.attempt}${a.fallbackFrom ? ` after ${a.fallbackFrom}` : ''}`) });
+    expect(seen).toEqual(['digest gemini#1', 'digest gemini#2', 'digest claude#1 after gemini']);
+  });
+
   it('honors manual routing from config (primary + reordered chain)', async () => {
     const g = scripted('gemini', [ok('g')]);
     const c = scripted('claude', [new LLMError('down', false)]);

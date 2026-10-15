@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { TOPICS, allToggleKeys } from '../catalog/index.js';
+import { MERGED_TOPICS, TOPICS, allToggleKeys } from '../catalog/index.js';
 
 // Same shape as the n8n-era digest-config.json, so the Config UI needs no data changes.
 // Secrets (llm.apiKeys, delivery.discordWebhookUrl) are accepted on input but always
@@ -90,10 +90,24 @@ export function normalizeConfig(input: unknown): Config {
 
   // Missing topic/source keys were already treated as ENABLED by the n8n pipeline
   // (`!== false`); fill them in explicitly so the UI shows what actually runs.
+  // A topic folded into another (MERGED_TOPICS) leaves the Topics list and the section order.
+  for (const t of Object.keys(MERGED_TOPICS)) delete c.topics[t];
+  c.format.sectionOrder = c.format.sectionOrder.filter(t => !(t in MERGED_TOPICS));
   for (const t of TOPICS) if (c.topics[t] === undefined) c.topics[t] = true;
   if (c.sources) for (const k of allToggleKeys()) if (c.sources[k] === undefined) c.sources[k] = true;
-  // (Custom Feeds is added/removed by the UI's Format tab depending on whether custom sources exist.)
-  for (const t of TOPICS) if (t !== 'Custom Feeds' && !c.format.sectionOrder.includes(t)) c.format.sectionOrder.push(t);
+  // Custom Feeds is a section exactly when there are custom sources (the Format tab did this on open, which
+  // made just viewing it count as an unsaved change).
+  const cs = c.customSources;
+  const hasCustom = cs.rss.length + cs.youtube.length + cs.xcancel.length > 0;
+  if (hasCustom && !c.format.sectionOrder.includes('Custom Feeds')) c.format.sectionOrder.push('Custom Feeds');
+  if (!hasCustom) c.format.sectionOrder = c.format.sectionOrder.filter(t => t !== 'Custom Feeds');
+  // A topic missing from the order (new since it was saved) goes after the topic before it in TOPICS, so a new
+  // Health lands next to Science & Space rather than after everything else.
+  for (const [i, t] of TOPICS.entries()) {
+    if (t === 'Custom Feeds' || c.format.sectionOrder.includes(t)) continue;
+    const prev = i > 0 ? c.format.sectionOrder.indexOf(TOPICS[i - 1]) : -1;
+    c.format.sectionOrder.splice(prev < 0 ? c.format.sectionOrder.length : prev + 1, 0, t);
+  }
 
   // Chain never repeats the primary and never lists an engine twice.
   c.llm.fallbackChain = [...new Set(c.llm.fallbackChain)].filter(e => e !== c.llm.primary);

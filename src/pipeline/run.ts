@@ -13,6 +13,7 @@ import type { DeliveryTarget } from './delivery/types.js';
 import { ingest } from './ingest/index.js';
 import type { FetchText } from './ingest/fetchFeeds.js';
 import { AllTiersFailedError, generate, llmTimeoutFor, type EngineOptions } from './llm/engine.js';
+import { attemptStage } from './llm/explain.js';
 import { resolveMode, type ModeRequest } from './mode.js';
 import { buildLlmPayload, buildManualPrompt, type ManualOutput } from './prompt/index.js';
 import { monthlyPrompt, weeklyPrompt } from './rollups.js';
@@ -33,10 +34,10 @@ const pidAlive = (pid: number) => {
   try { process.kill(pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException).code === 'EPERM'; }
 };
 
-type LockRow = { label: string; pid: number; started_at: string };
+type LockRow = { label: string; pid: number; started_at: string; title: string | null; stage: string | null };
 
 function liveLock(): LockRow | null {
-  const row = db().prepare('SELECT label, pid, started_at FROM run_lock WHERE id = 1').get() as LockRow | undefined;
+  const row = db().prepare('SELECT label, pid, started_at, title, stage FROM run_lock WHERE id = 1').get() as LockRow | undefined;
   if (!row) return null;
   const stale = Date.now() - Date.parse(row.started_at) > LOCK_STALE_MS || !pidAlive(row.pid);
   return stale ? null : row;
@@ -44,12 +45,31 @@ function liveLock(): LockRow | null {
 
 export const currentRun = () => liveLock()?.label ?? null;
 
+/** The run in progress (started here or by Task Scheduler) and its current step, for the app's Run button. */
+export interface RunStatus { title: string | null; stage: string | null; startedAt: string; trigger: string }
+export function runStatus(): RunStatus | null {
+  const row = liveLock();
+  return row && { title: row.title, stage: row.stage, startedAt: row.started_at, trigger: row.label.split(':')[0] };
+}
+
 const acquire = (label: string) => db().transaction(() => {
   if (liveLock()) return false;
-  db().prepare('INSERT OR REPLACE INTO run_lock (id, label, pid, started_at) VALUES (1, ?, ?, ?)')
+  db().prepare("INSERT OR REPLACE INTO run_lock (id, label, pid, started_at, title, stage) VALUES (1, ?, ?, ?, NULL, 'Starting')")
     .run(label, process.pid, new Date().toISOString());
   return true;
 }).immediate();
+
+const TITLES: Record<Mode, string> = { morning: 'Morning digest', nightly: 'Nightly digest', weekly: 'Weekly recap', monthly: 'Monthly recap' };
+/**
+ * Makes the run report its steps on the lock row, where the app's Run button reads them: ctx.progress for
+ * the pipeline, and the returned engine options for the AI's attempts.
+ */
+function track(ctx: RunContext, title: string, engine: EngineOptions = {}): EngineOptions {
+  ctx.progress = stage => {
+    db().prepare('UPDATE run_lock SET title = ?, stage = ? WHERE id = 1 AND pid = ?').run(title, stage, process.pid);
+  };
+  return { ...engine, onAttempt: a => { engine.onAttempt?.(a); ctx.progress?.(attemptStage(a)); } };
+}
 
 async function exclusive<T>(label: string, fn: () => Promise<T>): Promise<T> {
   if (!acquire(label)) throw new RunInProgressError();
@@ -133,11 +153,12 @@ async function guarded<T>(ctx: RunContext, fn: () => Promise<T & { llmTier?: str
 async function digestRun(mode: Mode, lookbackWindow: string, opts: RunOptions): Promise<DigestRunResult> {
   const { config } = getConfig();
   const ctx = createRun({ config, mode, lookbackWindow, dryRun: !!opts.dryRun, trigger: opts.trigger, kind: 'digest', now: opts.now });
+  const tracked = track(ctx, TITLES[mode], opts.engine);
   return guarded(ctx, async () => {
     ctx.log.info({ trigger: opts.trigger, lookbackWindow }, 'digest run started');
     const { items: raw, feedResults } = await ingest(ctx, { fetchText: opts.fetchText, tries: opts.feedTries });
     const items = assignIds(raw);
-    const engine: EngineOptions = { timeoutMs: llmTimeoutFor(feedResults.length), ...opts.engine };
+    const engine: EngineOptions = { timeoutMs: llmTimeoutFor(feedResults.length), ...tracked };
     ctx.log.info({ sources: feedResults.length, llmTimeoutMs: engine.timeoutMs }, 'LLM timeout set from source count');
 
     // Nightly continuity: today's morning digest from the DB (n8n's file lookup had broken).
@@ -160,6 +181,7 @@ async function digestRun(mode: Mode, lookbackWindow: string, opts: RunOptions): 
     }
     // The saved digest keeps every section; deliveries drop EXCLUDED / Everything Else when Format hides them.
     const delivered = forDelivery(digest, config.format);
+    ctx.progress?.('Delivering');
     const delivery = await deliverAll({ digest: delivered, mode, lookbackWindow }, ctx, opts.targets);
     return { runId: ctx.runId, mode, date: ctx.today, digest, digestId, llmTier: first.tier, delivery, stats: ctx.stats };
   });
@@ -168,8 +190,10 @@ async function digestRun(mode: Mode, lookbackWindow: string, opts: RunOptions): 
 async function promptRun(mode: Mode, lookbackWindow: string, opts: RunOptions) {
   const { config } = getConfig();
   const ctx = createRun({ config, mode, lookbackWindow, dryRun: !!opts.dryRun, trigger: opts.trigger, kind: 'prompt', now: opts.now });
+  track(ctx, 'Copy-paste prompt');
   return guarded(ctx, async () => {
     const { items } = await ingest(ctx, { fetchText: opts.fetchText, tries: opts.feedTries });
+    ctx.progress?.('Building the prompt');
     const morningDigest = mode === 'nightly' ? (findDigest(ctx.today, 'morning')?.content ?? '') : '';
     const out = buildManualPrompt({ mode, items, morningDigest }, config, ctx.today);
     const digestId = saveDigest({
@@ -184,12 +208,15 @@ async function promptRun(mode: Mode, lookbackWindow: string, opts: RunOptions) {
 async function rollupRun(mode: 'weekly' | 'monthly', lookbackWindow: string, opts: RunOptions): Promise<DigestRunResult> {
   const { config } = getConfig();
   const ctx = createRun({ config, mode, lookbackWindow, dryRun: !!opts.dryRun, trigger: opts.trigger, kind: 'rollup', now: opts.now });
+  const engine = track(ctx, TITLES[mode], opts.engine);
   return guarded(ctx, async () => {
+    ctx.progress?.('Reading the saved digests');
     const built = (mode === 'weekly' ? weeklyPrompt : monthlyPrompt)(ctx.now, config.schedule.timezone);
     ctx.stats.rollup = { digestsIncluded: built.digestCount, corpus: built.corpusMode };
-    const res = await generate({ kind: 'rollup', prompt: built.prompt }, config, ctx.log, opts.engine);
+    const res = await generate({ kind: 'rollup', prompt: built.prompt }, config, ctx.log, engine);
     ctx.stats.llm = { tier: res.tier, model: res.model, finishReason: res.finishReason, truncated: res.truncated, attempts: res.attempts };
     const digestId = saveDigest({ runId: ctx.runId, date: ctx.today, mode, content: res.text, dryRun: ctx.dryRun });
+    ctx.progress?.('Delivering');
     const delivery = await deliverAll({ digest: res.text, mode, lookbackWindow }, ctx, opts.targets);
     return { runId: ctx.runId, mode, date: ctx.today, digest: res.text, digestId, llmTier: res.tier, delivery, stats: ctx.stats };
   });

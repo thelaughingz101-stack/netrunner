@@ -91,7 +91,7 @@ describe('Manual-mode exporters', () => {
 });
 
 describe('Topic toggles reach every prompt (n8n ignored them in places)', () => {
-  const TOPICS_ALL = ['Gaming', 'TV & Movies', 'Media Announcements', 'Anime', 'Animation', 'Tech & Hardware', 'AI & LLMs', 'US Politics', 'World News', 'Business & Finance', 'Science & Space', 'Security', 'Comics', 'Notable Trends', 'Blindspot Analysis', 'Leaks & Rumors', 'Custom Feeds'];
+  const TOPICS_ALL = ['Gaming', 'TV & Movies', 'Anime', 'Animation', 'Tech & Hardware', 'AI & LLMs', 'US Politics', 'World News', 'Business & Finance', 'Science & Space', 'Health', 'Security', 'Comics', 'Notable Trends', 'Blindspot Analysis', 'Leaks & Rumors', 'Custom Feeds'];
   const only = (...on: string[]) => normalizeConfig({ topics: Object.fromEntries(TOPICS_ALL.map(t => [t, on.includes(t)])) });
   const leaksOnly = only('Leaks & Rumors');
 
@@ -115,6 +115,31 @@ describe('Topic toggles reach every prompt (n8n ignored them in places)', () => 
       for (const line of block) expect(p.user).toContain(line);
     });
   }
+
+  it('Health (added in NetRunner): its own section after Science & Space, and its own search', () => {
+    const p = buildLlmPayload({ mode: 'morning', items, morningDigest: '' }, only('Health'), []);
+    const headers = p.system.slice(p.system.indexOf('REQUIRED HEADER ORDER')).split('\n').filter(l => l.startsWith('## '));
+    expect(headers).toEqual(['## 🩺 Health', '## 📋 Everything Else', '## 🗒️ EXCLUDED']);
+    expect(p.user).toContain('- Public health news overnight (official WHO, CDC, FDA, NIH and ECDC announcements only)');
+    const all = buildLlmPayload({ mode: 'morning', items, morningDigest: '' }, normalizeConfig({}), []).system;
+    expect(all.indexOf('## 🩺 Health')).toBe(all.indexOf('## 🔭 Science & Space\n') + '## 🔭 Science & Space\n'.length);
+    for (const platform of ['chatgpt', 'claude', 'gemini', 'grok', 'deepseek'] as const) {
+      const sys = buildManualPrompt({ mode: 'morning', items, morningDigest: '' }, normalizeConfig({ ...only('Health'), delivery: { ...only('Health').delivery, chatbotPlatform: platform } }), '2026-10-08').systemInstructions;
+      expect(sys.split('\n').filter(l => /^## /.test(l)), platform).toEqual(['## 🩺 Health', '## 📋 Everything Else', '## 🗒️ EXCLUDED']);
+      expect(sys, platform).toContain('- 🩺 Health — official public-health bodies');
+    }
+  });
+
+  it('Media Announcements (folded into TV & Movies) is gone from every prompt; announcement searches follow their own topics', () => {
+    const everything = normalizeConfig({});
+    expect(buildLlmPayload({ mode: 'morning', items, morningDigest: '' }, everything, []).system).not.toContain('Media Announcements');
+    for (const platform of ['chatgpt', 'claude', 'gemini', 'grok', 'deepseek'] as const) {
+      const sys = buildManualPrompt({ mode: 'morning', items, morningDigest: '' }, normalizeConfig({ ...everything, delivery: { ...everything.delivery, chatbotPlatform: platform } }), '2026-10-08').systemInstructions;
+      expect(sys, platform).not.toContain('Media Announcements');
+    }
+    expect(buildLlmPayload({ mode: 'morning', items, morningDigest: '' }, only('TV & Movies'), []).user).toContain('- Any OFFICIALLY announced movie, or TV show news overnight');
+    expect(buildLlmPayload({ mode: 'morning', items, morningDigest: '' }, only('Gaming', 'Anime'), []).user).toContain('- Any OFFICIALLY announced game, or anime news overnight');
+  });
 
   it('AI Writer: no topics needing search → tells the model not to search', () => {
     expect(buildLlmPayload({ mode: 'morning', items, morningDigest: '' }, only('Tech & Hardware'), []).user).toContain('No live searches are needed');

@@ -1,15 +1,16 @@
 @echo off
 rem ===========================================================================
 rem  NetRunner one-click setup (Windows 10/11).
-rem  Double-click this file. It installs Node.js if needed, installs NetRunner,
-rem  adds NetRunner to the Desktop and Start menu, and opens it.
+rem  Double-click this file. It installs Node.js if needed, asks where NetRunner
+rem  should live (default %USERPROFILE%\NetRunner), installs it there, adds
+rem  NetRunner to the Desktop and Start menu, and opens it.
 rem  Safe to run again: re-running repairs the install or updates the shortcuts
 rem  (for example after moving this folder).
 rem  Run from a newer download, it updates the existing install in place (keeping
 rem  its settings, keys and digests) instead of installing a second copy.
 rem
 rem  Developer option:  "Setup NetRunner.cmd" --no-shortcuts
-rem  installs only (no shortcuts, does not open the app).
+rem  installs only, in this folder (no shortcuts, does not open the app).
 rem ===========================================================================
 setlocal EnableExtensions
 title NetRunner setup
@@ -32,7 +33,7 @@ rem Opening a file inside a zip makes Windows copy it to a folder like %TEMP%\Te
 echo "%~dp0" | findstr /i /r /c:"\\Temp[0-9]*_.*\.zip" >nul && goto :not_extracted
 
 rem --- 2. Node.js 22 or newer -------------------------------------------------
-echo   [1/4] Checking for Node.js...
+echo   [1/5] Checking for Node.js...
 call :find_node
 if defined NODE_EXE call :node_new_enough
 if defined NODE_OK goto :have_node
@@ -57,8 +58,9 @@ rem --- 3. NetRunner must be closed (its files are in use while it runs) ------
 "%NODE_EXE%" -e "fetch('http://127.0.0.1:8787/api/health',{signal:AbortSignal.timeout(1500)}).then(()=>process.exit(1),()=>process.exit(0))"
 if errorlevel 1 goto :app_running
 
-rem --- 4. Already installed somewhere else? Then update that install ----------
+rem --- 4. Already installed? Update that install. Otherwise ask where it goes ---
 if defined NO_SHORTCUTS goto :install_here
+echo.
 set "TARGET_FILE=%TEMP%\netrunner-setup-target.txt"
 if exist "%TARGET_FILE%" del "%TARGET_FILE%"
 "%NODE_EXE%" scripts\setup-update.mjs "%TARGET_FILE%"
@@ -79,20 +81,23 @@ if not "%CD_FAILED%"=="0" goto :update_failed
 
 :install_here
 echo.
-echo   [2/4] Installing NetRunner (this is the slow part)...
+echo   [3/5] Installing NetRunner (this is the slow part)...
 call "%NODE_DIR%npm.cmd" ci --no-audit --no-fund --loglevel=error
 if errorlevel 1 goto :npm_failed
+rem npm can finish without an error yet skip the database engine's build.
+"%NODE_EXE%" scripts\check-install.mjs
+if errorlevel 1 goto :engine_failed
 
 rem --- 5. Settings file (keys are entered later, inside the app) -------------
 echo.
-echo   [3/4] Preparing settings...
+echo   [4/5] Preparing settings...
 if not exist ".env" copy /y ".env.example" ".env" >nul
 echo         OK
 
 rem --- 6. Desktop + Start menu shortcuts, then open the app ------------------
 if defined NO_SHORTCUTS goto :done_no_shortcuts
 echo.
-echo   [4/4] Adding NetRunner to your Desktop and Start menu...
+echo   [5/5] Adding NetRunner to your Desktop and Start menu...
 call "%NODE_DIR%npm.cmd" run --silent install:desktop
 if errorlevel 1 goto :shortcut_failed
 
@@ -115,7 +120,7 @@ echo.
 echo   NetRunner runs from: %CD%
 echo   Do not move or delete that folder. If you do move it, double-click
 echo   Setup NetRunner there again.
-if /i not "%CD%\"=="%~dp0" echo   This download folder was only used to update it, so you can delete it.
+if /i not "%CD%\"=="%~dp0" echo   The download you ran Setup from is no longer needed, so you can delete it.
 echo.
 pause
 exit /b 0
@@ -192,10 +197,11 @@ exit /b 1
 
 :update_failed
 echo.
-echo   PROBLEM: updating your existing NetRunner failed. The reason is just above.
+echo   PROBLEM: Setup could not prepare the NetRunner folder. The reason is just above.
 echo.
-echo   Your settings, keys and digests are in its .env and data folder; Setup never
-echo   changes those. Fix the problem above, then run "Setup NetRunner" again.
+echo   If NetRunner was already installed, your settings, keys and digests are in its
+echo   .env and data folder; Setup never changes those. Fix the problem above, then
+echo   run "Setup NetRunner" again.
 echo.
 pause
 exit /b 1
@@ -208,6 +214,20 @@ echo.
 echo   Most common causes: no internet connection, a firewall or VPN blocking
 echo   registry.npmjs.org, or the disk being full. Fix that and run "Setup NetRunner" again.
 echo   If it keeps failing, send a screenshot of this window to whoever gave you NetRunner.
+echo.
+pause
+exit /b 1
+
+:engine_failed
+echo.
+echo   PROBLEM: NetRunner's parts installed, but its database engine did not (the reason
+echo   is just above), so NetRunner could not start.
+echo.
+echo   npm may be set to skip install scripts. In a Command Prompt, run:
+echo       npm config get ignore-scripts
+echo   If it says true, run:  npm config delete ignore-scripts
+echo   and then run "Setup NetRunner" again. If it keeps failing, send a screenshot of
+echo   this window to whoever gave you NetRunner.
 echo.
 pause
 exit /b 1

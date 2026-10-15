@@ -18,6 +18,16 @@ export function openDb(file?: string): DB {
   return db;
 }
 
+/**
+ * better-sqlite3's compiled part is missing or built for a different Node.js: the install skipped its build
+ * (npm 12 without an allowScripts entry, or `ignore-scripts` set), or Node.js was updated since. Re-running
+ * Setup rebuilds it.
+ */
+export function isNativeBuildError(err: unknown): boolean {
+  const e = err as NodeJS.ErrnoException | undefined;
+  return e?.code === 'ERR_DLOPEN_FAILED' || /Could not locate the bindings file|NODE_MODULE_VERSION/.test(e?.message ?? '');
+}
+
 export function db(): DB {
   if (!instance) instance = openDb();
   return instance;

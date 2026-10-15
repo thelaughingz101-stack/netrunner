@@ -1,6 +1,7 @@
 // Port of n8n "Ollama RSS-Only Mode" → "Basic LLM Chain" (Ollama Chat Model) → "Parse Ollama Output".
 // Those nodes were disabled in n8n; this is the first time the tier is actually wired.
 import { env } from '../../env.js';
+import { llmFetch } from './http.js';
 import { LLMError, type LLMRequest, type Provider } from './types.js';
 
 /** Prompt text verbatim from "Ollama RSS-Only Mode"; `items` is Build LLM Payload's user message. */
@@ -24,7 +25,6 @@ Only include sections you can fill from the RSS items provided:
 ## 🖥️ Tech & Hardware
 ## 🤖 AI & LLMs
 ## 🎬 TV & Movies
-## 🎙️ Media Announcements
 ## 📚 Comics
 
 FORMAT: Clean Markdown. ## headers. Bold bullet headlines.
@@ -42,7 +42,7 @@ function promptFor(req: LLMRequest): string {
     : `${req.prompt.system}\n\n${req.prompt.user}`;
 }
 
-export function ollamaProvider(fetchImpl: typeof fetch = fetch): Provider {
+export function ollamaProvider(fetchImpl: typeof fetch = llmFetch): Provider {
   return {
     tier: 'ollama',
     unavailable: () => (env().OLLAMA_URL ? null : 'OLLAMA_URL not set'),

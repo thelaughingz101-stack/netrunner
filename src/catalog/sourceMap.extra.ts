@@ -17,6 +17,8 @@ export const EXTRA_SOURCE_MAP: Record<string, SourceTag> = {
   'appleinsider.com': t('AppleInsider', 'Tech & Hardware'),
   'cnet.com':        t('CNET', 'Tech & Hardware'),
 
+  // TV & Movies
+  'hollywoodreporter.com': t('Hollywood Reporter', 'TV & Movies'),
   // Animation
   'cartoonbrew.com':                 t('Cartoon Brew', 'Animation'),
   'animationmagazine.net':           t('Animation Magazine', 'Animation'),
@@ -44,6 +46,16 @@ export const EXTRA_SOURCE_MAP: Record<string, SourceTag> = {
   'sciencedaily.com':        t('ScienceDaily', 'Science & Space'),
   'arstechnica.com/science': t('Ars Technica Science', 'Science & Space'),
   'arstechnica.com/space':   t('Ars Technica Science', 'Science & Space'),
+  // Health. CDC's feeds link through tools.cdc.gov's downloader; m= is the feed, so MMWR gets its own tag.
+  'who.int':        t('WHO', 'Health'),
+  'paho.org':       t('PAHO', 'Health'),
+  'cdc.gov':        t('CDC', 'Health'),
+  'tools.cdc.gov/api/embed/downloader/download.asp?m=342778': t('CDC MMWR', 'Health'),
+  'fda.gov':        t('FDA', 'Health'),
+  'fda.gov/safety/': t('FDA Recalls', 'Health'),
+  'nih.gov':        t('NIH', 'Health'),
+  'hhs.gov':        t('HHS', 'Health'),
+  'ecdc.europa.eu': t('ECDC', 'Health'),
   // AI & LLMs
   'the-decoder.com':          t('The Decoder', 'AI & LLMs'),
   'technologyreview.com':     t('MIT Technology Review AI', 'AI & LLMs'),
@@ -87,4 +99,9 @@ export const EXTRA_SOURCE_MAP: Record<string, SourceTag> = {
 // YouTube items are tagged by the feed's <author> string.
 export const EXTRA_YOUTUBE_AUTHORS: Record<string, SourceTag> = {
   'Bloomberg Originals': t('Bloomberg', 'Business & Finance'),
+  'World Health Organization (WHO)': t('WHO', 'Health'),
+  'Universal Pictures':          t('Universal Pictures', 'TV & Movies'),
+  'Sony Pictures Entertainment': t('Sony Pictures', 'TV & Movies'),
+  'Paramount Pictures':          t('Paramount Pictures', 'TV & Movies'),
+  'Lionsgate Movies':            t('Lionsgate', 'TV & Movies'),
 };

@@ -212,7 +212,7 @@ describe('ensureCoverage (end-to-end with a scripted LLM)', () => {
     const { p } = scripted([new LLMError('quota', false)]);
     const out = await ensureCoverage(ctx, items, withIdRule(buildLlmPayload({ mode: 'morning', items, morningDigest: '' }, config, [])),
       { tier: 'gemini', model: 'g', text: DIGEST, finishReason: 'STOP', truncated: false, attempts: [] }, opts(p));
-    expect(out.rounds[0].error).toMatch(/quota/);
+    expect(out.rounds[0].error).toMatch(/Gemini hit its usage limit/);
     expect(out.forced).toBe(2);
     expect(diffCoverage(out.digest, items.map(i => i.id!)).missing).toEqual([]);
   });

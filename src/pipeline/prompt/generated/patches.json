@@ -25,6 +25,26 @@
     "why": "Search results for disabled topics were landing in Everything Else."
   },
   {
+    "id": "media-merged-order-payload",
+    "node": "Build LLM Payload",
+    "why": "Media Announcements was folded into TV & Movies (its four studio channels moved there): no longer a section."
+  },
+  {
+    "id": "media-merged-header-payload",
+    "node": "Build LLM Payload",
+    "why": "Media Announcements folded into TV & Movies: its header goes."
+  },
+  {
+    "id": "health-order-payload",
+    "node": "Build LLM Payload",
+    "why": "Health topic (added in NetRunner, not in n8n): its place in the default section order, after Science & Space."
+  },
+  {
+    "id": "health-header-payload",
+    "node": "Build LLM Payload",
+    "why": "Health topic: its section header."
+  },
+  {
     "id": "topics-comics-rules-payload",
     "node": "Build LLM Payload",
     "why": "The Comics rules (\"always show all 8 publishers\") were sent even with Comics off."
@@ -85,6 +105,26 @@
     "why": "Leaks & Rumors was always included (and listed twice); it now comes from the toggles, once."
   },
   {
+    "id": "media-merged-emoji-chatgpt",
+    "node": "digest_export_(ChatGPT)",
+    "why": "Media Announcements was folded into TV & Movies (its four studio channels moved there): no longer a section."
+  },
+  {
+    "id": "media-merged-rule-chatgpt",
+    "node": "digest_export_(ChatGPT)",
+    "why": "Media Announcements folded into TV & Movies: its section rule goes."
+  },
+  {
+    "id": "health-emoji-chatgpt",
+    "node": "digest_export_(ChatGPT)",
+    "why": "Health topic (added in NetRunner, not in n8n): its emoji, and its place in the default order after Science & Space."
+  },
+  {
+    "id": "health-rule-chatgpt",
+    "node": "digest_export_(ChatGPT)",
+    "why": "Health topic: its section rule."
+  },
+  {
     "id": "topics-headers-bf-chatgpt",
     "node": "digest_export_(ChatGPT)",
     "why": "Hardcoded Business & Finance header removed (toggle-driven now)."
@@ -133,6 +173,26 @@
     "id": "topics-leaks-hardcoded-claude",
     "node": "digest_export_(Claude)",
     "why": "Leaks & Rumors was always included (and listed twice); it now comes from the toggles, once."
+  },
+  {
+    "id": "media-merged-emoji-claude",
+    "node": "digest_export_(Claude)",
+    "why": "Media Announcements was folded into TV & Movies (its four studio channels moved there): no longer a section."
+  },
+  {
+    "id": "media-merged-rule-claude",
+    "node": "digest_export_(Claude)",
+    "why": "Media Announcements folded into TV & Movies: its section rule goes."
+  },
+  {
+    "id": "health-emoji-claude",
+    "node": "digest_export_(Claude)",
+    "why": "Health topic (added in NetRunner, not in n8n): its emoji, and its place in the default order after Science & Space."
+  },
+  {
+    "id": "health-rule-claude",
+    "node": "digest_export_(Claude)",
+    "why": "Health topic: its section rule."
   },
   {
     "id": "topics-headers-bf-claude",
@@ -185,6 +245,26 @@
     "why": "Leaks & Rumors was always included (and listed twice); it now comes from the toggles, once."
   },
   {
+    "id": "media-merged-emoji-grok",
+    "node": "digest_export_(grok)",
+    "why": "Media Announcements was folded into TV & Movies (its four studio channels moved there): no longer a section."
+  },
+  {
+    "id": "media-merged-rule-grok",
+    "node": "digest_export_(grok)",
+    "why": "Media Announcements folded into TV & Movies: its section rule goes."
+  },
+  {
+    "id": "health-emoji-grok",
+    "node": "digest_export_(grok)",
+    "why": "Health topic (added in NetRunner, not in n8n): its emoji, and its place in the default order after Science & Space."
+  },
+  {
+    "id": "health-rule-grok",
+    "node": "digest_export_(grok)",
+    "why": "Health topic: its section rule."
+  },
+  {
     "id": "topics-headers-bf-grok",
     "node": "digest_export_(grok)",
     "why": "Hardcoded Business & Finance header removed (toggle-driven now)."
@@ -233,6 +313,26 @@
     "id": "topics-leaks-hardcoded-deepseek",
     "node": "Digest_export_[DeepSeek]",
     "why": "Leaks & Rumors was always included (and listed twice); it now comes from the toggles, once."
+  },
+  {
+    "id": "media-merged-emoji-deepseek",
+    "node": "Digest_export_[DeepSeek]",
+    "why": "Media Announcements was folded into TV & Movies (its four studio channels moved there): no longer a section."
+  },
+  {
+    "id": "media-merged-rule-deepseek",
+    "node": "Digest_export_[DeepSeek]",
+    "why": "Media Announcements folded into TV & Movies: its section rule goes."
+  },
+  {
+    "id": "health-emoji-deepseek",
+    "node": "Digest_export_[DeepSeek]",
+    "why": "Health topic (added in NetRunner, not in n8n): its emoji, and its place in the default order after Science & Space."
+  },
+  {
+    "id": "health-rule-deepseek",
+    "node": "Digest_export_[DeepSeek]",
+    "why": "Health topic: its section rule."
   },
   {
     "id": "topics-headers-bf-deepseek",
@@ -298,6 +398,26 @@
     "id": "topics-leaks-hardcoded-gemini",
     "node": "digest_export_(Gemini)",
     "why": "Leaks & Rumors was always included (and listed twice); it now comes from the toggles, once."
+  },
+  {
+    "id": "media-merged-emoji-gemini",
+    "node": "digest_export_(Gemini)",
+    "why": "Media Announcements was folded into TV & Movies (its four studio channels moved there): no longer a section."
+  },
+  {
+    "id": "media-merged-rule-gemini",
+    "node": "digest_export_(Gemini)",
+    "why": "Media Announcements folded into TV & Movies: its section rule goes."
+  },
+  {
+    "id": "health-emoji-gemini",
+    "node": "digest_export_(Gemini)",
+    "why": "Health topic (added in NetRunner, not in n8n): its emoji, and its place in the default order after Science & Space."
+  },
+  {
+    "id": "health-rule-gemini",
+    "node": "digest_export_(Gemini)",
+    "why": "Health topic: its section rule."
   },
   {
     "id": "topics-headers-bf-gemini",

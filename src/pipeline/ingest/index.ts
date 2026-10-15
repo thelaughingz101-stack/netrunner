@@ -19,7 +19,16 @@ export async function ingest(ctx: RunContext, opts: { fetchText?: FetchText; tri
   const { feeds, skippedXCancel } = buildFeedList(config);
   log.info({ feeds: feeds.length, skippedXCancel, custom: feeds.filter(f => f.custom).length }, 'fetching feeds');
 
-  const { articles, results } = await fetchFeeds(feeds, log, { fetchText: opts.fetchText, tries: opts.tries });
+  // At most a few progress writes a second: a run fetches 100+ feeds.
+  let shown = 0;
+  const fetching = (done: number, total: number) => {
+    if (done < total && Date.now() - shown < 250) return;
+    shown = Date.now();
+    ctx.progress?.(`Fetching sources (${done} of ${total})`);
+  };
+  fetching(0, feeds.length);
+  const { articles, results } = await fetchFeeds(feeds, log, { fetchText: opts.fetchText, tries: opts.tries, onProgress: fetching });
+  ctx.progress?.(`Sorting and tagging ${articles.length} stories`);
   const failed = results.filter(r => r.status === 'error');
   const empty = results.filter(r => r.status === 'empty');
 

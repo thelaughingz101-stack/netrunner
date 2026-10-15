@@ -22,8 +22,9 @@ html,body{margin:0;padding:0;background:#0c0809;height:100%}
 @keyframes nr-jitter{0%,100%{transform:translateX(0)}20%{transform:translateX(-4px)}40%{transform:translateX(3px)}60%{transform:translateX(-2px)}80%{transform:translateX(2px)}}
 @keyframes nr-jitter2{0%,100%{transform:translateX(0)}30%{transform:translateX(4px)}65%{transform:translateX(-3px)}}
 @keyframes nr-bar{0%,90%,100%{opacity:0}91%{opacity:.55}95%{opacity:.55}96%{opacity:0}}
+@keyframes nr-spin{to{transform:rotate(360deg)}}
 ::-webkit-scrollbar{width:10px}
-::-webkit-scrollbar-track{background:#0c0809}
+::-webkit-scrollbar-track{background:transparent}
 ::-webkit-scrollbar-thumb{background:#2c1d20}
 ::-webkit-scrollbar-thumb:hover{background:#ff6d3a66}
 input[type=time]::-webkit-calendar-picker-indicator{filter:invert(.55) sepia(1) saturate(6) hue-rotate(335deg)}
@@ -44,6 +45,8 @@ const { useState, useEffect } = React;
 // before this script compiles — no more hand-synced copy of the feed list here.
 const TOPICS  = window.NR_CATALOG.topics;
 const SOURCES = window.NR_CATALOG.sources;
+// Full names for sources known by an abbreviation ("CDC" → "Centers for Disease Control and Prevention (CDC)").
+const LABELS  = window.NR_CATALOG.labels || {};
 
 const TIMEZONES = [
   "America/New_York","America/Chicago","America/Denver","America/Los_Angeles",
@@ -168,15 +171,22 @@ const s = {
 
 // ── SECTION HEADER ────────────────────────────────────────────────────────────
 
-function SectionTitle({ children, hint }) {
+// Every card starts with one of these: red bar, UPPERCASE title, muted hint, and an optional button on the right.
+function SectionTitle({ children, hint, action }) {
   return (
     <div style={{ display:"flex", alignItems:"center", gap:11, marginBottom:18 }}>
-      <span style={{ width:4, height:17, background:C.red, boxShadow:`0 0 9px ${C.red}99` }} />
+      <span style={{ width:4, height:17, background:C.red, boxShadow:`0 0 9px ${C.red}99`, flexShrink:0 }} />
       <span style={{ fontFamily:F.disp, fontSize:17, fontWeight:700, color:C.text, letterSpacing:"0.05em", textTransform:"uppercase" }}>{children}</span>
       {hint && <span style={{ fontFamily:F.body, fontSize:12.5, color:C.muted, marginLeft:2 }}>{hint}</span>}
+      {action && <div style={{ marginLeft:"auto" }}>{action}</div>}
     </div>
   );
 }
+
+// Secondary actions (Add, Turn all on, Export…): orange outline. The one main action on a screen is solid orange.
+const outlineBtn = { ...s.btn, background:"transparent", color:C.orange, border:`1px solid ${C.orangeLn}`, whiteSpace:"nowrap" };
+// Bulk on/off for a list (Topics → Turn all on, Sources → Select all): small mono pill.
+const bulkBtn = { fontFamily:F.mono, fontSize:11, color:C.orange, letterSpacing:"0.04em", cursor:"pointer", background:"transparent", border:`1px solid ${C.orangeLn}`, borderRadius:3, padding:"4px 9px", whiteSpace:"nowrap" };
 
 // ── CONTROLS ──────────────────────────────────────────────────────────────────
 
@@ -311,13 +321,15 @@ function N8nBadge({ status }) {
   const connected = status === "connected";
   const checking  = status === "checking";
   const dotColor  = checking ? C.muted : connected ? C.green : C.red;
-  const label     = checking ? "server checking…" : connected ? "server connected" : "server offline";
+  // The app's only connection indicator: green when fine, so it never reads as a warning.
+  const label     = checking ? "server checking…" : connected ? "server connected" : "server offline: reopen NetRunner";
   return (
-    <div style={{ display:"inline-flex", alignItems:"center", gap:7, padding:"5px 11px", borderRadius:20,
-      border:`1px solid ${connected ? C.orangeLn : checking ? C.border : C.redLn}`,
-      background: connected ? C.orangeDim : checking ? "transparent" : C.redDim }}>
+    <div title={connected ? `NetRunner's server is running (${window.location.host})` : undefined}
+      style={{ display:"inline-flex", alignItems:"center", gap:7, padding:"5px 11px", borderRadius:20,
+      border:`1px solid ${connected ? `${C.green}44` : checking ? C.border : C.redLn}`,
+      background: connected ? `${C.green}10` : checking ? "transparent" : C.redDim }}>
       <span style={{ width:7, height:7, borderRadius:"50%", background:dotColor, boxShadow:`0 0 8px ${dotColor}` }} />
-      <span style={{ fontFamily:F.mono, fontSize:11, color: connected ? C.orange : checking ? C.muted : C.red, letterSpacing:"0.04em" }}>{label}</span>
+      <span style={{ fontFamily:F.mono, fontSize:11, color: connected ? C.green : checking ? C.muted : C.red, letterSpacing:"0.04em" }}>{label}</span>
     </div>
   );
 }
@@ -376,33 +388,47 @@ const TABS = [
 
 // ── SECTIONS ──────────────────────────────────────────────────────────────────
 
-function TemplatesTab({ onApply, onExport, onImport }) {
+// A starting point matches your settings when every topic and every fetched source is on (Everything on)
+// or off (Start fresh). They're starting points, not modes: once you change anything, neither matches.
+const matchesTemplate = (config, id) => {
+  const want = id === "default";
+  return TOPICS.every(t => !!config.topics[t] === want) && [...COUNTABLE_SOURCE_SET].every(k => !!config.sources[k] === want);
+};
+
+function TemplatesTab({ config, onApply, onExport, onImport }) {
   return (
     <div>
       <h1 style={s.h1}>Get started</h1>
-      <p style={{ ...s.sub, marginBottom:26 }}>Pick a starting point, then fine-tune everything in the steps that follow. Your digest runs on your NetRunner server.</p>
+      <p style={{ ...s.sub, marginBottom:26 }}>Pick a starting point, then fine-tune it in the other tabs. Picking one fills in those tabs; nothing is saved until you press Save.</p>
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:18 }}>
         {[
-          { id:"default", title:"Everything on", desc:"Every category and every source enabled — the complete digest as shipped.", tag:"RECOMMENDED", color:C.orange },
+          { id:"default", title:"Everything on", desc:"Every category and every source enabled: the complete digest as shipped.", tag:"RECOMMENDED", color:C.orange },
           { id:"blank",   title:"Start fresh", desc:"Every option off. Switch on only the topics and sources you care about.", tag:"BLANK", color:C.muted },
-        ].map(t => (
-          <div key={t.id} style={{ ...s.card, cursor:"pointer", marginBottom:0, transition:"border-color .15s", clipPath:NOTCH }}
-               onClick={() => onApply(t.id)}
-               onMouseEnter={e => e.currentTarget.style.borderColor = C.orangeLn}
-               onMouseLeave={e => e.currentTarget.style.borderColor = C.border}>
-            <div style={{ fontFamily:F.mono, fontSize:10.5, letterSpacing:"0.14em", color:t.color, border:`1px solid ${t.color}55`, display:"inline-block", padding:"4px 9px", borderRadius:3, marginBottom:15 }}>{t.tag}</div>
-            <div style={{ fontFamily:F.disp, fontSize:24, fontWeight:700, color:C.text, marginBottom:7, letterSpacing:"0.01em" }}>{t.title}</div>
-            <div style={{ fontSize:14, fontFamily:F.body, color:C.muted, marginBottom:20, lineHeight:1.55 }}>{t.desc}</div>
-            <button style={{ ...s.btn, background:C.orange, color:"#1a0d07", boxShadow:`0 0 18px ${C.orange}33`, clipPath:NOTCH }}>Use this →</button>
-          </div>
-        ))}
+        ].map(t => {
+          const current = matchesTemplate(config, t.id);
+          const primary = t.id === "default";
+          return (
+            <div key={t.id} style={{ ...s.card, cursor:"pointer", marginBottom:0, transition:"border-color .15s", clipPath:NOTCH, borderColor: current ? `${C.cyan}66` : C.border }}
+                 onClick={() => onApply(t.id)}
+                 onMouseEnter={e => e.currentTarget.style.borderColor = C.orangeLn}
+                 onMouseLeave={e => e.currentTarget.style.borderColor = current ? `${C.cyan}66` : C.border}>
+              <div style={{ display:"flex", gap:8, marginBottom:15 }}>
+                <div style={{ fontFamily:F.mono, fontSize:10.5, letterSpacing:"0.14em", color:t.color, border:`1px solid ${t.color}55`, padding:"4px 9px", borderRadius:3 }}>{t.tag}</div>
+                {current && <div title="Your settings on screen match this starting point" style={{ fontFamily:F.mono, fontSize:10.5, letterSpacing:"0.14em", color:C.cyan, border:`1px solid ${C.cyan}55`, background:C.cyanDim, padding:"4px 9px", borderRadius:3 }}>✓ CURRENT</div>}
+              </div>
+              <div style={{ fontFamily:F.disp, fontSize:24, fontWeight:700, color:C.text, marginBottom:7, letterSpacing:"0.01em" }}>{t.title}</div>
+              <div style={{ fontSize:14, fontFamily:F.body, color:C.muted, marginBottom:20, lineHeight:1.55 }}>{t.desc}</div>
+              <button style={primary ? { ...s.btn, background:C.orange, color:"#1a0d07", boxShadow:`0 0 18px ${C.orange}33`, clipPath:NOTCH } : outlineBtn}>Use this →</button>
+            </div>
+          );
+        })}
       </div>
       <div style={{ ...s.card, marginTop:18 }}>
         <SectionTitle hint="API keys are never included">Your settings</SectionTitle>
         <Row label="Move to another PC, or keep a backup" sub="Export saves everything on screen to a file. Import loads a file from Export (or an old n8n digest-config.json); press Save to keep it.">
           <div style={{ display:"flex", gap:8 }}>
-            <button onClick={onExport} style={{ ...s.btn, whiteSpace:"nowrap", background:"transparent", color:C.orange, border:`1px solid ${C.orangeLn}` }}>Export settings</button>
-            <button onClick={onImport} style={{ ...s.btn, whiteSpace:"nowrap", background:"transparent", color:C.orange, border:`1px solid ${C.orangeLn}` }}>Import settings…</button>
+            <button onClick={onExport} style={outlineBtn}>Export settings</button>
+            <button onClick={onImport} style={outlineBtn}>Import settings…</button>
           </div>
         </Row>
       </div>
@@ -415,16 +441,14 @@ function TopicsTab({ config, update }) {
   const onCount = TOPICS.filter(t => config.topics[t]).length;
   return (
     <div>
-      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-end", marginBottom:20 }}>
-        <div>
-          <h1 style={s.h1}>Topics</h1>
-          <span style={{ fontFamily:F.body, fontSize:14, color:C.muted }}>{onCount} of {TOPICS.length} categories tracked</span>
-        </div>
-        <button onClick={() => TOPICS.forEach(t => update(`topics.${t}`, !allOn))} style={{ ...s.btn, background:"transparent", color:C.orange, border:`1px solid ${C.orangeLn}` }}>
-          {allOn ? "Turn all off" : "Turn all on"}
-        </button>
-      </div>
+      <h1 style={s.h1}>Topics</h1>
+      <p style={{ ...s.sub, marginBottom:20 }}>The sections your digest can have. Pick the sites and channels for each on the Sources tab.</p>
       <div style={s.card}>
+        <SectionTitle hint={`${onCount} of ${TOPICS.length} on`} action={
+          <button onClick={() => TOPICS.forEach(t => update(`topics.${t}`, !allOn))} style={bulkBtn}>
+            {allOn ? "Turn all off" : "Turn all on"}
+          </button>
+        }>Topics</SectionTitle>
         {TOPICS.map((t) => (
           <Row key={t} label={t}>
             <Toggle on={!!config.topics[t]} onChange={v => update(`topics.${t}`, v)} />
@@ -433,10 +457,10 @@ function TopicsTab({ config, update }) {
       </div>
       <div style={s.card}>
         <SectionTitle hint="always at the end of the digest">Catch-all sections</SectionTitle>
-        <Row label="📋 Everything Else" sub="Stories from your enabled sources that don't fit any topic above. When off, they're left out of Discord, email, the saved file and the Output tab (Output can still show them).">
+        <Row label="Everything Else" sub="Stories from your enabled sources that don't fit any topic above. When off, they're left out of Discord, email, the saved file and the Output tab (Output can still show them).">
           <Toggle on={config.format.showEverythingElse !== false} onChange={v => update("format.showEverythingElse", v)} />
         </Row>
-        <Row label="🗒️ Excluded list" sub="Stories the AI skipped and why (duplicate, stale, filler…). Same on/off behaviour.">
+        <Row label="Excluded list" sub="Stories the AI skipped and why (duplicate, stale, filler…). Same on/off behaviour.">
           <Toggle on={config.format.showExcluded !== false} onChange={v => update("format.showExcluded", v)} />
         </Row>
       </div>
@@ -495,7 +519,7 @@ function SourcesTab({ config, update }) {
               <div style={{ display:"flex", alignItems:"center", gap:14 }}>
                 <span
                   onClick={e => { e.stopPropagation(); setAllInCategory(allSrcs, !allOn); }}
-                  style={{ fontFamily:F.mono, fontSize:11, color:C.orange, letterSpacing:"0.04em", cursor:"pointer", border:`1px solid ${C.orangeLn}`, borderRadius:3, padding:"4px 9px" }}
+                  style={bulkBtn}
                 >
                   {allOn ? "Deselect all" : "Select all"}
                 </span>
@@ -525,7 +549,7 @@ function SourcesTab({ config, update }) {
                             onClick={disabled ? undefined : () => update(`sources.${src}`, !config.sources[src])}
                             style={{ ...s.tag, cursor: disabled ? "default" : "pointer", background: on ? C.orangeDim : C.pill, borderColor: on ? C.orangeLn : C.border, color: on ? C.orange : C.muted }}
                           >
-                            <span style={{ fontWeight:700, opacity: on ? 1 : .65 }}>{on ? "✓" : "+"}</span> {src}
+                            <span style={{ fontWeight:700, opacity: on ? 1 : .65 }}>{on ? "✓" : "+"}</span> {LABELS[src] || src}
                           </div>
                         );
                       })}
@@ -619,7 +643,7 @@ function DeliveryTab({ config, update, secrets = {} }) {
       <h1 style={{ ...s.h1, marginBottom:20 }}>Delivery</h1>
       <div style={s.card}>
         <SectionTitle hint="where your digest lands">Outputs</SectionTitle>
-        <Row label="Discord" sub="Post the digest to a Discord channel via webhook">
+        <Row label="Discord" sub={config.delivery.discord ? "Post the digest to a Discord channel via webhook" : "Post the digest to a Discord channel. Turn on to add the channel's webhook URL."}>
           <Toggle on={!!config.delivery.discord} onChange={v => update("delivery.discord", v)} />
         </Row>
         {config.delivery.discord && (
@@ -629,7 +653,7 @@ function DeliveryTab({ config, update, secrets = {} }) {
             <EnvFileLinks />
           </div>
         )}
-        <Row label="Email" sub="Send the digest to an email address">
+        <Row label="Email" sub={config.delivery.email ? "Send the digest to an email address" : "Send the digest to an email address. Turn on to enter the address and the account that sends it."}>
           <Toggle on={!!config.delivery.email} onChange={v => update("delivery.email", v)} />
         </Row>
         {config.delivery.email && (
@@ -655,7 +679,7 @@ function DeliveryTab({ config, update, secrets = {} }) {
         <Row label="Open in NetRunner" sub="When a scheduled digest is ready, open the app on it. Every digest is also kept in the Output tab either way.">
           <Toggle on={!!config.delivery.openInApp} onChange={v => update("delivery.openInApp", v)} />
         </Row>
-        <Row label="Save to file" sub="Write the digest to a local file on the server">
+        <Row label="Save to file" sub={config.delivery.textFile ? "Write the digest to a file on this PC" : "Write the digest to a file on this PC. Turn on to choose the folder and file type."}>
           <Toggle on={!!config.delivery.textFile} onChange={v => update("delivery.textFile", v)} />
         </Row>
         {config.delivery.textFile && (
@@ -681,8 +705,8 @@ function DeliveryTab({ config, update, secrets = {} }) {
 }
 
 // What's actually scheduled right now (Windows Task Scheduler, or the server's own timer elsewhere).
-// Reflects the last Save — unsaved edits on this tab aren't scheduled yet.
-function NextRuns() {
+// Reflects the last Save; `pending` = this tab has unsaved edits, which aren't scheduled yet.
+function NextRuns({ pending }) {
   const [info, setInfo] = useState(null);
   useEffect(() => {
     let alive = true;
@@ -696,6 +720,12 @@ function NextRuns() {
   return (
     <div style={s.card}>
       <SectionTitle hint={!info?.backend ? undefined : info.backend === "windows" ? "runs even when this window is closed" : "runs while the server is running"}>Next runs</SectionTitle>
+      {pending && (
+        <div style={{ display:"flex", gap:10, alignItems:"baseline", border:`1px solid ${C.orangeLn}`, background:C.orangeDim, borderRadius:4, padding:"10px 14px", marginBottom:12, fontFamily:F.body, fontSize:13.5, color:C.orange }}>
+          <span style={{ fontWeight:700 }}>!</span>
+          <span>Not scheduled yet: press <b>Save</b> to apply your changes below. Until then, the runs listed here are the ones from your last save.</span>
+        </div>
+      )}
       {!info && <p style={{ ...s.sub, margin:0 }}>Checking…</p>}
       {info?.error && <p style={{ ...s.sub, margin:0, color:C.red }}>Couldn't read the schedule from the server.</p>}
       {info && !info.error && !jobs.length && <p style={{ ...s.sub, margin:0 }}>Nothing scheduled.</p>}
@@ -707,14 +737,14 @@ function NextRuns() {
       ))}
       {info?.backend === "windows" && (
         <p style={{ fontFamily:F.body, fontSize:12, color:C.faint, marginTop:12, marginBottom:0, lineHeight:1.5 }}>
-          Scheduled through Windows Task Scheduler: digests run with NetRunner closed, can wake the PC from sleep, and a run missed while the PC was off starts when it's back on. Press Save to apply changes below.
+          Scheduled through Windows Task Scheduler: digests run with NetRunner closed, can wake the PC from sleep, and a run missed while the PC was off starts when it's back on.
         </p>
       )}
     </div>
   );
 }
 
-function ScheduleTab({ config, update }) {
+function ScheduleTab({ config, update, pending }) {
   const freq = config.schedule.frequency;
   const morningActive = freq !== "weekly";
   const nightlyActive = freq === "twice_daily";
@@ -732,11 +762,12 @@ function ScheduleTab({ config, update }) {
     <div>
       <h1 style={{ ...s.h1, marginBottom:20 }}>Schedule</h1>
       <div style={s.card}>
-        <Row label="Automatic digests" sub={enabled ? "On: digests and recaps run on the schedule below" : "Off: nothing runs on its own. Use Run News Digest whenever you want one."}>
+        <SectionTitle>Automatic digests</SectionTitle>
+        <Row label="Run on a schedule" sub={enabled ? "On: digests and recaps run on the schedule below" : "Off: nothing runs on its own. Use Run News Digest whenever you want one."}>
           <Toggle on={enabled} onChange={v => update("schedule.enabled", v)} />
         </Row>
       </div>
-      <NextRuns />
+      <NextRuns pending={pending} />
       <div style={enabled ? {} : dimStyle}>
       <div style={s.card}>
         <SectionTitle>How often</SectionTitle>
@@ -782,9 +813,15 @@ function ScheduleTab({ config, update }) {
       </div>
       <div style={s.card}>
         <SectionTitle hint="how old can stories be?">Catch-up range</SectionTitle>
-        <p style={{ fontFamily:F.body, fontSize:12.5, color:C.faint, marginTop:-6, marginBottom:14 }}>
-          How far back NetRunner looks for stories on every run, scheduled or manual. 12 hours suits twice-daily digests; pick 24 hours for once daily. (The weekly digest always covers a week.)
-        </p>
+        {freq === "weekly" && enabled ? (
+          <p style={{ fontFamily:F.body, fontSize:13, color:C.cyan, marginTop:-6, marginBottom:14, lineHeight:1.5 }}>
+            Your scheduled weekly digest always covers the past week. This range is for when you press Run News Digest.
+          </p>
+        ) : (
+          <p style={{ fontFamily:F.body, fontSize:12.5, color:C.muted, marginTop:-6, marginBottom:14, lineHeight:1.5 }}>
+            How far back NetRunner looks for stories on every run, scheduled or manual. 12 hours suits twice-daily digests; pick 24 hours for once daily.
+          </p>
+        )}
         {LOOKBACK_OPTIONS.map(o => (
           <Row key={o.id} label={o.label}>
             <Radio on={(config.schedule.lookbackWindow || "12h")===o.id} onClick={() => update("schedule.lookbackWindow", o.id)} />
@@ -1129,11 +1166,6 @@ function FormatTab({ config, update }) {
         ))}
       </div>
       <div style={s.card}>
-        <Row label="Show the Excluded list" sub="The 🗒️ EXCLUDED list at the end of each digest: stories the AI skipped and why (duplicate, stale, filler…). When off, it's left out of Discord, email, the saved file and the Output tab. It's still kept, so you can peek at it from Output.">
-          <Toggle on={config.format.showExcluded !== false} onChange={v => update("format.showExcluded", v)} />
-        </Row>
-      </div>
-      <div style={s.card}>
         <SectionTitle>Language</SectionTitle>
         <select style={{ ...s.select, width:"100%" }} value={config.format.language} onChange={e => update("format.language", e.target.value)}>
           {["English","Spanish","French","German","Japanese","Portuguese"].map(l => <option key={l} value={l}>{l}</option>)}
@@ -1158,9 +1190,8 @@ function FormatTab({ config, update }) {
 function RollupsTab({ config, update }) {
   return (
     <div>
-      <h2 style={{ ...s.h1, fontSize:24, marginTop:30, marginBottom:6 }}>Weekly & monthly recaps</h2>
-      <p style={{ ...s.sub, marginBottom:18 }}>Recaps are written from the digests NetRunner saved over the period, plus the story tracker.</p>
       <div style={s.card}>
+        <SectionTitle hint="written from the digests saved over the period, plus the story tracker">Weekly & monthly recaps</SectionTitle>
         <Row label="Weekly recap" sub="Sundays at 12:00 — summarises the past 7 days of digests">
           <Toggle on={!!config.rollups.weekly} onChange={v => update("rollups.weekly", v)} />
         </Row>
@@ -1194,7 +1225,7 @@ function CustomBulkField({ label, sub, items, onAddAll, onRemove, placeholder })
         style={{ ...s.input, padding:"12px", resize:"vertical", fontFamily:F.mono, fontSize:12.5, lineHeight:1.6 }}
       />
       <div style={{ marginTop:10 }}>
-        <button onClick={handleAddAll} style={{ ...s.btn, background:C.orange, color:"#1a0d07" }}>Add all</button>
+        <button onClick={handleAddAll} style={outlineBtn}>Add all</button>
       </div>
       <div style={{ marginTop:12, display:"flex", flexWrap:"wrap", gap:7 }}>
         {items.map((item, i) => (
@@ -1306,7 +1337,7 @@ function YouTubeResolveField({ items, onAddAll, onAddEntry, onRemove }) {
           style={{ ...s.input, padding:"12px", resize:"vertical", fontFamily:F.mono, fontSize:12.5, lineHeight:1.6 }}
         />
         <div style={{ marginTop:10 }}>
-          <button onClick={handleAddAll} style={{ ...s.btn, background:C.orange, color:"#1a0d07" }}>Add all</button>
+          <button onClick={handleAddAll} style={outlineBtn}>Add all</button>
         </div>
       </div>}
       <div style={{ marginTop:12, display:"flex", flexWrap:"wrap", gap:7 }}>
@@ -1359,9 +1390,8 @@ function CustomSourcesTab({ config, update }) {
 
   return (
     <div>
-      <h2 id="add-your-own" style={{ ...s.h1, fontSize:24, marginTop:30, marginBottom:6 }}>Add your own</h2>
-      <p style={{ ...s.sub, marginBottom:18 }}>Your own RSS feeds and YouTube channels. They're fetched alongside the built-in sources and land in the Custom Feeds section.</p>
-      <div style={s.card}>
+      <div id="add-your-own" style={{ ...s.card, marginTop:22 }}>
+        <SectionTitle hint="fetched with the built-in sources, shown under Custom Feeds">Add your own</SectionTitle>
         <CustomBulkField
           label="RSS feeds"
           sub="Paste one or more RSS feed URLs, one per line."
@@ -1504,8 +1534,55 @@ function OutputTab({ entries, selectedId, onSelect, onRemove, onImport, showDefa
   );
 }
 
+// Same settings regardless of key order (the server's copy and a starting point list keys differently).
+const stableJson = v => JSON.stringify(v, (k, x) => x && typeof x === "object" && !Array.isArray(x)
+  ? Object.fromEntries(Object.entries(x).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) : x);
+
+const elapsed = iso => {
+  const sec = Math.max(0, Math.floor((Date.now() - Date.parse(iso)) / 1000));
+  return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`;
+};
+
+// Run News Digest. While any run is going (started here or by the schedule), hovering shows what it's doing.
+// Hover is tracked on the wrapper: a disabled button gets no mouse events.
+function RunButton({ runState, liveRun, onRun }) {
+  const [hover, setHover] = useState(false);
+  const [, tick] = useState(0);
+  const running = runState === "running" || !!liveRun;
+  useEffect(() => {
+    if (!hover || !running) return;
+    const t = setInterval(() => tick(n => n + 1), 1000);
+    return () => clearInterval(t);
+  }, [hover, running]);
+  const color = running ? C.orange : runState === "success" ? C.green : runState === "error" ? C.red : C.orange;
+  return (
+    <div style={{ position:"relative" }} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
+      <button onClick={onRun} disabled={running} aria-describedby={running ? "nr-run-status" : undefined}
+        onFocus={() => setHover(true)} onBlur={() => setHover(false)}
+        style={{ ...s.btn, display:"flex", alignItems:"center", gap:"clamp(6px,0.8vw,9px)", cursor: running ? "default" : "pointer",
+          background:"transparent", color, border:`1px solid ${running ? C.orangeLn : runState==="success" ? C.green : runState==="error" ? C.red : C.orangeLn}`,
+          fontSize:"clamp(12px, 1.1vw, 15px)", padding:"clamp(8px,1vw,10px) clamp(16px,2vw,22px)", whiteSpace:"nowrap", opacity: running ? 0.8 : 1 }}>
+        <span style={{ fontSize:"0.85em", lineHeight:1, display:"inline-block", animation: running ? "nr-spin 1.2s linear infinite" : "none" }}>{running ? "◌" : runState==="success" ? "✓" : runState==="error" ? "✕" : "▶"}</span>
+        {running ? "Running…" : runState==="success" ? "Digest Sent" : runState==="error" ? "Run Failed" : "Run News Digest"}
+      </button>
+      {running && hover && (
+        <div id="nr-run-status" role="status" style={{ position:"absolute", bottom:"calc(100% + 10px)", left:"50%", transform:"translateX(-50%)", width:320, maxWidth:"80vw",
+          background:C.panel, border:`1px solid ${C.orangeLn}`, borderRadius:5, padding:"11px 14px", boxShadow:"0 8px 28px rgba(0,0,0,.55)", zIndex:20 }}>
+          <div style={{ display:"flex", justifyContent:"space-between", gap:10, fontFamily:F.mono, fontSize:10.5, letterSpacing:"0.1em", color:C.muted, textTransform:"uppercase", marginBottom:6 }}>
+            <span>{(liveRun && liveRun.title) || "Digest"}{liveRun && liveRun.trigger === "schedule" ? " · scheduled" : ""}</span>
+            {liveRun && <span>{elapsed(liveRun.startedAt)}</span>}
+          </div>
+          <div style={{ fontFamily:F.body, fontSize:14, color:C.text, lineHeight:1.45 }}>{(liveRun && liveRun.stage) || "Starting…"}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DigestConfig() {
   const [config, setConfig] = useState(deepClone(DEFAULT_CONFIG));
+  // The settings as last loaded from or saved to the server: anything different on screen is unsaved.
+  const [savedConfig, setSavedConfig] = useState(null);
   const [tab, setTab]       = useState("templates");
   const [flash, setFlash]   = useState(null);
   const [layout, setLayout] = useState(() => localStorage.getItem("nr_layout") || "tabs");
@@ -1521,6 +1598,9 @@ function DigestConfig() {
     if (res.keyStorage) setKeyStorage(res.keyStorage);
   };
   const [runState, setRunState] = useState("idle"); // idle | running | success | error
+  // For async code that must see the current value, not the one from when it started.
+  const runStateRef = React.useRef(runState);
+  runStateRef.current = runState;
 
   const [runError, setRunError] = useState("");
   const [promptResult, setPromptResult]     = useState(null);
@@ -1573,6 +1653,7 @@ function DigestConfig() {
   const persistConfig = async () => {
     const res = await api("/api/config", { method: "PUT", body: config });
     setConfig(res.config);
+    setSavedConfig(res.config);
     setSecrets(res.secrets || {});
     return res.config;
   };
@@ -1604,7 +1685,9 @@ function DigestConfig() {
     } catch(e) {
       setRunState("error");
       // Stays up until dismissed — a 6-second flash was easy to miss.
-      setRunError(e.status === 409 ? "A run is already in progress (maybe a scheduled one) — wait for it to finish." : e.message);
+      // The server already explains a failed run in plain words (which AI failed and why); the "HTTP 502" adds nothing.
+      setRunError(e.status === 409 ? "A run is already in progress (maybe a scheduled one). Wait for it to finish."
+        : e.status === 502 && e.data && e.data.error ? e.data.error : e.message);
     }
   };
   const dismissRunError = () => { setRunState("idle"); setRunError(""); };
@@ -1649,6 +1732,28 @@ function DigestConfig() {
     return () => clearInterval(interval);
   }, []);
 
+  // The run in progress (started here or by Task Scheduler) and its current step, for the Run button.
+  // Every 2 s while one runs, every 10 s otherwise, so a scheduled run shows up without a reload.
+  const [liveRun, setLiveRun] = useState(null);
+  const lastLiveRun = React.useRef(null);
+  useEffect(() => {
+    let alive = true, timer;
+    const poll = async () => {
+      let next = null;
+      try { next = (await api("/api/run/status", { timeoutMs: 4000 })).running; } catch(e) {}
+      if (!alive) return;
+      // A run that just ended (a scheduled one, say) may have saved a digest to show in Output.
+      if (lastLiveRun.current && !next) refreshEntries();
+      // A new run makes an old run's error stale (and it would sit on top of the progress on hover).
+      if (next && !lastLiveRun.current && runStateRef.current === "error") { setRunState("idle"); setRunError(""); }
+      lastLiveRun.current = next;
+      setLiveRun(next);
+      timer = setTimeout(poll, next || runState === "running" ? 2000 : 10000);
+    };
+    poll();
+    return () => { alive = false; clearTimeout(timer); };
+  }, [runState]);
+
   // Load the saved config + output history from the server on open.
   useEffect(() => {
     (async () => {
@@ -1657,6 +1762,7 @@ function DigestConfig() {
         const res = await api("/api/config");
         notices.push(...(res.problems || []));
         setConfig(res.config);
+        setSavedConfig(res.config);
         setSecrets(res.secrets || {});
         setKeys(res.keys || {});
         if (res.keyStorage) setKeyStorage(res.keyStorage);
@@ -1675,7 +1781,8 @@ function DigestConfig() {
           if (failed.length) notices.push(`${what} wrote the digest, but sending it failed:\n${failed.join("\n")}`);
         }
       } catch(e) {}
-      if (notices.length) { setRunState("error"); setRunError(notices.join("\n\n")); }
+      // Not if a run was started meanwhile (clicked right after opening): that run's outcome matters more.
+      if (notices.length && runStateRef.current !== "running") { setRunState("error"); setRunError(notices.join("\n\n")); }
       // Opened by a scheduled run (Delivery → Open in NetRunner): /?digest=<id>
       const digestId = Number(new URLSearchParams(location.search).get("digest"));
       if (digestId) {
@@ -1707,10 +1814,12 @@ function DigestConfig() {
     setTab("topics");
   };
 
-  const tabIndex = TABS.findIndex(t => t.id === tab);
-  const goNext = () => { if (tabIndex < TABS.length - 1) setTab(TABS[tabIndex + 1].id); };
-  const goPrev = () => { if (tabIndex > 0) setTab(TABS[tabIndex - 1].id); };
-  const isLast = tabIndex === TABS.length - 1;
+  // Save and Undo only do something when the settings on screen differ from the saved ones. If the saved
+  // settings never loaded, Save stays available.
+  const dirty = savedConfig !== null && stableJson(config) !== stableJson(savedConfig);
+  const canSave = dirty || savedConfig === null;
+  const schedulePending = savedConfig !== null
+    && stableJson([config.schedule, config.rollups]) !== stableJson([savedConfig.schedule, savedConfig.rollups]);
 
   const saveConfig = async () => {
     try {
@@ -1728,6 +1837,7 @@ function DigestConfig() {
     try {
       const res = await api("/api/config");
       setConfig(res.config);
+      setSavedConfig(res.config);
       setSecrets(res.secrets || {});
       setFlash("reverted");
     } catch(e) { setFlash("error"); }
@@ -1777,11 +1887,11 @@ function DigestConfig() {
 
   const content = (
     <KeysCtx.Provider value={{ keys, saveKeys, keyStorage }}>
-      {tab === "templates" && <TemplatesTab onApply={applyTemplate} onExport={exportSettings} onImport={importSettings} />}
+      {tab === "templates" && <TemplatesTab config={config} onApply={applyTemplate} onExport={exportSettings} onImport={importSettings} />}
       {tab === "topics"    && <TopicsTab    config={config} update={update} />}
       {tab === "sources"   && <React.Fragment><SourcesTab config={config} update={update} /><CustomSourcesTab config={config} update={update} /></React.Fragment>}
       {tab === "delivery"  && <DeliveryTab  config={config} update={update} secrets={secrets} />}
-      {tab === "schedule"  && <React.Fragment><ScheduleTab config={config} update={update} /><RollupsTab config={config} update={update} /></React.Fragment>}
+      {tab === "schedule"  && <React.Fragment><ScheduleTab config={config} update={update} pending={schedulePending} /><RollupsTab config={config} update={update} /></React.Fragment>}
       {tab === "llm"       && <LLMTab       config={config} update={update} updateLLMPrimary={updateLLMPrimary} runForPrompt={runForPrompt} promptResult={promptResult} promptParts={promptParts} promptRunState={promptRunState} secrets={secrets} />}
       {tab === "format"    && <FormatTab    config={config} update={update} />}
       {tab === "output"    && <OutputTab showDefaults={{ excluded: config.format.showExcluded !== false, everythingElse: config.format.showEverythingElse !== false }} entries={outputEntries} selectedId={selectedEntryId} onSelect={setSelectedEntryId} onRemove={removeEntry} onImport={importMdFile} />}
@@ -1816,49 +1926,49 @@ function DigestConfig() {
     </div>
   );
 
-  // ── BOTTOM ACTION BAR (Back / status / Run / Save / Next) ──
-  const ActionBar = () => (
-    <div style={{ display:"grid", gridTemplateColumns:"auto 1fr auto", alignItems:"center", gap:14, padding:"15px 32px", borderTop:`1px solid ${C.border}`, background:C.bg2, position:"relative", zIndex:2 }}>
+  // ── BOTTOM ACTION BAR (status / Run / Undo / Save) ──
+  // Rendered as an element, not a component defined here: a component made inside this function is a new
+  // type every render, which remounted the bar (and would reset the Run button's hover) on each status poll.
+  const offBtn = { opacity:0.4, cursor:"not-allowed", boxShadow:"none" };
+  const actionBar = (
+    <div style={{ display:"grid", gridTemplateColumns:"1fr auto 1fr", alignItems:"center", gap:14, padding:"15px 32px", borderTop:`1px solid ${C.border}`, background:C.bg2, position:"relative", zIndex:2 }}>
       <div style={{ display:"flex", alignItems:"center", gap:14, minWidth:0 }}>
-        <button onClick={goPrev} disabled={tabIndex===0} style={{ ...s.btn, flexShrink:0, background:"transparent", color: tabIndex===0 ? C.faint : C.body, border:`1px solid ${C.border}` }}>← Back</button>
-        <div style={{ display:"flex", alignItems:"center", gap:8, fontFamily:F.mono, fontSize:11.5, color:C.muted, letterSpacing:"0.03em", overflow:"hidden", whiteSpace:"nowrap" }}>
-          <span style={{ width:7, height:7, borderRadius:"50%", flexShrink:0, background: n8nStatus==="connected" ? C.green : n8nStatus==="offline" ? C.red : C.muted, boxShadow:`0 0 8px ${n8nStatus==="connected" ? C.green : n8nStatus==="offline" ? C.red : C.muted}` }} />
-          <span title={window.location.host} style={{ overflow:"hidden", textOverflow:"ellipsis", fontFamily:F.body, fontSize:12.5 }}>
-            {n8nStatus==="connected" ? "Connected to local server" : n8nStatus==="offline" ? "Server offline — reopen NetRunner" : "Connecting…"}
+        {flash ? (
+          <span style={{ fontFamily:F.mono, fontSize:12, color: flash==="error" ? C.red : C.green, letterSpacing:"0.03em", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>
+            {flash==="saved" ? "✓ settings saved" : flash==="loaded" ? "✓ settings loaded" : flash==="reverted" ? "✓ back to your saved settings" : flash==="imported" ? "✓ settings imported. Press Save to keep them" : "✕ error"}
           </span>
-        </div>
-        {flash && (
-          <span style={{ fontFamily:F.mono, fontSize:12, color: flash==="error" ? C.red : C.green, letterSpacing:"0.03em", flexShrink:0 }}>
-            {flash==="saved" ? "✓ config saved" : flash==="loaded" ? "✓ config loaded" : flash==="reverted" ? "✓ back to your saved settings" : flash==="imported" ? "✓ settings imported. Press Save to keep them" : "✕ error"}
+        ) : dirty && (
+          <span style={{ display:"inline-flex", alignItems:"center", gap:8, fontFamily:F.mono, fontSize:12, color:C.orange, letterSpacing:"0.03em", whiteSpace:"nowrap" }}>
+            <span style={{ width:7, height:7, borderRadius:"50%", background:C.orange, boxShadow:`0 0 8px ${C.orange}` }} />
+            Unsaved changes
           </span>
         )}
       </div>
       <div style={{ display:"flex", flexDirection:"column", alignItems:"center", minWidth:0, position:"relative" }}>
-        <div style={{ display:"flex", alignItems:"center", gap:6 }}>
-          <button onClick={runNow} disabled={runState==="running"} style={{ ...s.btn,
-            display:"flex", alignItems:"center", gap:"clamp(6px,0.8vw,9px)", cursor: runState==="running" ? "default" : "pointer",
-            background:"transparent",
-            color: runState==="success" ? C.green : runState==="error" ? C.red : C.orange,
-            border:`1px solid ${runState==="success" ? C.green : runState==="error" ? C.red : C.orangeLn}`,
-            fontSize:"clamp(12px, 1.1vw, 15px)", padding:"clamp(8px,1vw,10px) clamp(16px,2vw,22px)",
-            whiteSpace:"nowrap", opacity: runState==="running" ? 0.7 : 1 }}>
-            <span style={{ fontSize:"0.85em", lineHeight:1 }}>{runState==="running" ? "◌" : runState==="success" ? "✓" : runState==="error" ? "✕" : "▶"}</span>
-            {runState==="running" ? "Running…" : runState==="success" ? "Digest Sent" : runState==="error" ? "Run Failed" : "Run News Digest"}
-          </button>
-        </div>
+        <RunButton runState={runState} liveRun={liveRun} onRun={runNow} />
         {runState==="error" && runError && (
-          <div role="alert" style={{ position:"absolute", top:"100%", marginTop:8, width:420, maxWidth:"80vw", maxHeight:"40vh", overflowY:"auto", background:C.panel, border:`1px solid ${C.redLn}`, borderRadius:5, padding:"9px 30px 9px 12px", fontFamily:F.mono, fontSize:11, color:C.red, lineHeight:1.5, zIndex:10, boxShadow:"0 8px 24px rgba(0,0,0,.5)", whiteSpace:"pre-wrap", overflowWrap:"anywhere", userSelect:"text" }}>
-            <button onClick={dismissRunError} title="Dismiss" aria-label="Dismiss" style={{ position:"absolute", top:4, right:6, background:"transparent", border:"none", color:C.red, cursor:"pointer", fontSize:14, lineHeight:1 }}>×</button>
-            {runError}
+          // Above the button: the bar is the bottom edge of the window, so anything below it was cut off.
+          <div role="alert" style={{ position:"absolute", bottom:"calc(100% + 10px)", width:520, maxWidth:"86vw", maxHeight:"50vh", overflowY:"auto", background:C.panel, border:`1px solid ${C.redLn}`, borderRadius:5, padding:"11px 34px 12px 14px", zIndex:10, boxShadow:"0 8px 28px rgba(0,0,0,.55)", userSelect:"text" }}>
+            <button onClick={dismissRunError} title="Dismiss" aria-label="Dismiss" style={{ position:"absolute", top:6, right:8, background:"transparent", border:"none", color:C.red, cursor:"pointer", fontSize:16, lineHeight:1 }}>×</button>
+            <div style={{ fontFamily:F.mono, fontSize:10.5, letterSpacing:"0.1em", color:C.red, textTransform:"uppercase", marginBottom:7 }}>✕ Needs attention</div>
+            <div style={{ fontFamily:F.body, fontSize:13.5, color:C.text, lineHeight:1.55, whiteSpace:"pre-wrap", overflowWrap:"anywhere" }}>
+              {/* "• " lines get a hanging indent, so a wrapped line lines up with its text, not the bullet */}
+              {runError.split("\n").map((line, i) => (
+                <div key={i} style={line.startsWith("• ") ? { paddingLeft:13, textIndent:-13, marginTop:3 } : { minHeight: line ? undefined : 9 }}>{line}</div>
+              ))}
+            </div>
           </div>
         )}
       </div>
-      <div style={{ display:"flex", alignItems:"center", gap:10, flexShrink:0 }}>
-        <button onClick={loadConfig} title="Discard unsaved changes and go back to your last saved settings" style={{ ...s.btn, background:"transparent", color:C.muted, border:`1px solid ${C.border}` }}>Undo changes</button>
-        <button onClick={saveConfig} style={{ ...s.btn, background:"transparent", color:C.orange, border:`1px solid ${C.orangeLn}` }}>Save</button>
-        <button onClick={isLast ? saveConfig : goNext} style={{ ...s.btn, background:C.orange, color:"#1a0d07", boxShadow:`0 0 18px ${C.orange}44`, clipPath:NOTCH, paddingRight:24 }}>
-          {isLast ? "Finish ✓" : "Next →"}
-        </button>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"flex-end", gap:10 }}>
+        <button onClick={loadConfig} disabled={!dirty} title={dirty ? "Discard unsaved changes and go back to your last saved settings" : "Nothing to undo"}
+          style={{ ...s.btn, background:"transparent", color:C.muted, border:`1px solid ${C.border}`, ...(dirty ? {} : offBtn) }}>Undo changes</button>
+        <button onClick={saveConfig} disabled={!canSave} title={canSave ? "Save your changes" : "No unsaved changes"}
+          // Full padding and a border in both states: same size either way (Undo doesn't jump), and never a
+          // paddingRight on top of the padding shorthand (removing it fell back to the browser's 6px).
+          style={canSave
+            ? { ...s.btn, padding:"10px 24px 10px 18px", background:C.orange, color:"#1a0d07", border:`1px solid ${C.orange}`, boxShadow:`0 0 18px ${C.orange}44`, clipPath:NOTCH }
+            : { ...outlineBtn, padding:"10px 24px 10px 18px", ...offBtn }}>Save</button>
       </div>
     </div>
   );
@@ -1900,7 +2010,7 @@ function DigestConfig() {
         <div style={{ flex:1, overflowY:"auto", position:"relative", zIndex:1 }}>
           <div style={{ maxWidth:920, margin:"0 auto", padding:"34px 32px 48px" }}>{content}</div>
         </div>
-        <ActionBar />
+        {actionBar}
       </div>
     );
   }
@@ -1938,7 +2048,7 @@ function DigestConfig() {
         <div style={{ flex:1, overflowY:"auto" }}>
           <div style={{ maxWidth:880, margin:"0 auto", padding:"34px 36px 48px" }}>{content}</div>
         </div>
-        <ActionBar />
+        {actionBar}
       </div>
     </div>
   );

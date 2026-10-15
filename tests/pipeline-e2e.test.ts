@@ -6,7 +6,7 @@ import { freshState } from './helpers.js';
 import { saveConfig } from '../src/config/store.js';
 import { db } from '../src/db/db.js';
 import { findDigest } from '../src/digests.js';
-import { run, runPrompt } from '../src/pipeline/run.js';
+import { run, runPrompt, runStatus } from '../src/pipeline/run.js';
 import { getRun } from '../src/pipeline/runs.js';
 import { buildApp } from '../src/server/app.js';
 import { runRoutes } from '../src/server/routes/run.js';
@@ -131,7 +131,7 @@ describe('full pipeline (fake feeds + scripted LLM)', () => {
     const target = recordingTarget();
     const dead: Provider = { tier: 'gemini', unavailable: () => null, call: async () => { throw Object.assign(new Error('boom')); } };
     await expect(run({ trigger: 'cli', forceMode: 'morning', fetchText, feedTries: 1, engine: { providers: { gemini: dead }, tries: 2, retryDelayMs: 0 }, targets: [target.t] }))
-      .rejects.toThrow(/all LLM tiers failed/);
+      .rejects.toThrow(/No AI could write the digest/);
     const last: any = db().prepare("SELECT status, stats_json FROM runs WHERE kind = 'digest' ORDER BY started_at DESC LIMIT 1").get();
     expect(last.status).toBe('error');
     expect(JSON.parse(last.stats_json).llmAttempts).toHaveLength(2);
@@ -152,5 +152,23 @@ describe('full pipeline (fake feeds + scripted LLM)', () => {
     await first;
     const runs = (await app.inject({ method: 'GET', url: '/api/runs' })).json();
     expect(runs.runs[0]).toMatchObject({ status: 'ok', kind: 'digest' });
+  });
+
+  it('says what the run is doing right now (the Run button hover), and clears when it ends', async () => {
+    const seen: Record<string, string> = {};
+    const sample = (k: string) => { const st = runStatus(); if (st && !(k in seen)) seen[k] = `${st.title}: ${st.stage}`; };
+    const llm = forgetfulLlm();
+    const provider: Provider = { ...llm.p, call: async (req, signal) => { sample(req.kind); return llm.p.call(req, signal); } };
+    const target = recordingTarget();
+    const t: DeliveryTarget = { ...target.t, render: (input, ctx) => { const r = target.t.render(input, ctx); return { ...r, send: async () => { sample('deliver'); return r.send(); } }; } };
+    const app = await buildApp([runRoutes]);
+    await run({ trigger: 'api', forceMode: 'morning', fetchText: async (url: string) => { sample('fetch'); return fetchText(url); }, feedTries: 1, engine: { providers: { gemini: provider }, tries: 1 }, targets: [t] });
+
+    expect(seen.fetch).toMatch(/^Morning digest: Fetching sources \(\d+ of \d+\)$/);
+    expect(seen.digest).toBe('Morning digest: Writing the digest with Gemini');
+    expect(seen.recovery).toBe('Morning digest: Adding the stories the first draft missed, with Gemini');
+    expect(seen.deliver).toBe('Morning digest: Delivering');
+    expect(runStatus()).toBeNull();
+    expect((await app.inject({ method: 'GET', url: '/api/run/status' })).json()).toEqual({ running: null });
   });
 });

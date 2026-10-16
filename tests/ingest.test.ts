@@ -50,13 +50,10 @@ describe('Normalize & Tag', () => {
     ]);
   });
 
-  it('caps built-in sources at 8 but never caps Custom Feeds', () => {
+  it('no longer caps: the per-source cap runs after the time window (limits.ts)', () => {
     const ign = Array.from({ length: 12 }, (_, i) => a({ link: `https://ign.com/${i}` }));
-    const custom = Array.from({ length: 12 }, (_, i) => a({ link: `https://my-blog.dev/${i}` }));
-    const { items, capped } = normalize([...ign, ...custom], 'morning');
-    expect(items.filter(i => i.source === 'IGN')).toHaveLength(8);
-    expect(items.filter(i => i.category === 'Custom Feeds')).toHaveLength(12);
-    expect(capped).toBe(4);
+    const { items } = normalize(ign, 'morning');
+    expect(items.filter(i => i.source === 'IGN')).toHaveLength(12);
   });
 
   it('marks YouTube Shorts and strips HTML from summaries', () => {
@@ -148,6 +145,21 @@ describe('fetch + full ingest (fake network)', () => {
     expect(items.map(i => i.title).sort()).toEqual(['My custom post', 'Rockstar reveals Grand Theft Auto trailer date']);
     expect(feedResults.filter(r => r.status === 'error').length).toBeGreaterThan(50);
     expect(ctx.stats.ingest).toMatchObject({ itemsKept: 2, droppedOutsideWindow: 1 });
+  }, 60_000);
+
+  it('caps each source after the time window, so old stories never use up its share', async () => {
+    const now = new Date();
+    const fresh = (h: number) => new Date(now.getTime() - h * 3600e3).toISOString();
+    const config = normalizeConfig({ sources: {}, topics: { Gaming: true } });
+    const ctx = createRun({ config, mode: 'morning', lookbackWindow: '12h', dryRun: true, trigger: 'cli', kind: 'digest', now });
+    const words = ['zelda', 'halo', 'tetris', 'doom', 'kirby', 'metroid', 'portal', 'fallout', 'starfield'];
+    const fetchText = async (url: string) => url.includes('ign.com')
+      ? { status: 200, text: rss([{ title: 'Ancient archive story', link: 'https://ign.com/old', date: '2020-01-01T00:00:00Z' },
+          ...words.map((w, i) => ({ title: `${w} ${w}ish ${w}ness report`, link: `https://ign.com/${w}`, date: fresh(i + 1) }))]) }
+      : { status: 500, text: '' };
+    const { items } = await ingest(ctx, { fetchText, tries: 1 });
+    expect(items.filter(i => i.source === 'IGN')).toHaveLength(8); // 12h cap; n8n's order kept only 7
+    expect(ctx.stats.ingest).toMatchObject({ droppedOutsideWindow: 1, droppedPerSourceCap: 1, droppedTopicLimit: 0 });
   }, 60_000);
 });
 

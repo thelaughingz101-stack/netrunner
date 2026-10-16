@@ -10,6 +10,16 @@ export const EVERYTHING_ELSE_HEADER = '## 📋 Everything Else';
 const TAG_RE = /\[#(N\d{3,})\]/g;
 const HAS_TAG = /\[#N\d{3,}\]/;
 
+const LOOSE_TAG_RE = /\[\s*(?:cite:\s*)?#?\s*N\d{3,}(?:\s*,\s*#?\s*N\d{3,})*\s*\]/gi;
+
+/**
+ * Rewrites the id tag as Gemini sometimes words it ("[cite: N034]", "[cite: N034, N059]", "[N034]") into
+ * "[#N034]". On 2026-10-16 the Comics call tagged 11 stories "[cite: …]": they counted as dropped, were written
+ * a second time by the recovery pass, and the tags showed in the digest.
+ */
+export const normalizeTags = (md: string) =>
+  md.replace(LOOSE_TAG_RE, m => m.match(/N\d{3,}/gi)!.map(id => `[#${id.toUpperCase()}]`).join(''));
+
 /** N001, N002, … in feed order (zero-padded to the feed size so they sort lexically). */
 export function assignIds(items: Item[]): Item[] {
   const width = Math.max(3, String(items.length).length);
@@ -69,7 +79,7 @@ ${JSON.stringify(missing)}`;
 }
 
 /** Split Markdown into [header, bodyLines][] (header '' = preamble before the first ##). */
-function sections(md: string): [string, string[]][] {
+export function sections(md: string): [string, string[]][] {
   const out: [string, string[]][] = [['', []]];
   for (const line of md.split('\n')) {
     if (/^##\s/.test(line)) out.push([line.trim(), []]);
@@ -78,7 +88,7 @@ function sections(md: string): [string, string[]][] {
   return out;
 }
 
-const headerKey = (h: string) => h.replace(/^##\s*/, '').replace(/[^\p{L}\p{N}&]+/gu, ' ').trim().toLowerCase();
+export const headerKey = (h: string) => h.replace(/^##\s*/, '').replace(/[^\p{L}\p{N}&]+/gu, ' ').trim().toLowerCase();
 
 /** Merge recovery bullets into the matching sections of the digest. Unmatched headers → Everything Else. */
 export function mergeRecovery(digest: string, recovery: string): string {
@@ -111,14 +121,13 @@ export function mergeRecovery(digest: string, recovery: string): string {
   return doc.map(([h, body]) => (h ? [h, ...body] : body).join('\n')).join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
+/** A feed item as a plain headline bullet, no summary: "- [**Title**](link) *(Source)* [#N017]". */
+export const plainBullet = (i: Item) => `- ${i.link ? `[**${i.title}**](${i.link})` : `**${i.title}**`} *(${i.source})* [#${i.id}]`;
+
 /** Last resort: list still-missing items deterministically under Everything Else (no LLM summary). */
 export function forcePlace(digest: string, items: Item[]): string {
   if (!items.length) return digest;
-  const bullets = items.map(i => {
-    const head = i.link ? `[**${i.title}**](${i.link})` : `**${i.title}**`;
-    return `- ${head} *(${i.source})* [#${i.id}]`;
-  }).join('\n');
-  return mergeRecovery(digest, `${EVERYTHING_ELSE_HEADER}\n${bullets}`);
+  return mergeRecovery(digest, `${EVERYTHING_ELSE_HEADER}\n${items.map(plainBullet).join('\n')}`);
 }
 
 const KW_STOP = new Set(['the', 'and', 'for', 'with', 'from', 'that', 'this', 'into', 'about', 'after', 'over', 'your', 'reason', 'https', 'http', 'www', 'com']);
@@ -154,6 +163,25 @@ export function removeUntaggedMentions(digest: string, items: Item[]): { digest:
 
 /** Remove id tags before delivery. */
 export const stripTags = (md: string) => md.replace(/\s*\[#N\d{3,}\]/g, '');
+
+/**
+ * Drops a story bullet that repeats an earlier one word for word (tags and spacing ignored). An AI stuck in a
+ * loop repeats lines until it runs out of room: on 2026-10-15 two US Politics bullets came back ~70 times.
+ * Only story bullets (they carry a link) and EXCLUDED lines ("— reason:") count: boilerplate such as Comics'
+ * "No confirmed releases found for this week." belongs under every publisher it's written for.
+ */
+export function dedupeBullets(md: string): { md: string; removed: number } {
+  const seen = new Set<string>();
+  let removed = 0;
+  const out = md.split('\n').filter(line => {
+    if (!/^\s*[-*] /.test(line) || !(line.includes('](') || /—\s*reason:/i.test(line))) return true;
+    const key = line.replace(TAG_RE, '').replace(/\s+/g, ' ').trim().toLowerCase();
+    if (seen.has(key)) { removed++; return false; }
+    seen.add(key);
+    return true;
+  });
+  return { md: out.join('\n'), removed };
+}
 
 /** Removes every ## section whose header matches (header through the next ## header or the end). */
 export function stripSections(md: string, header: RegExp): string {

@@ -80,6 +80,14 @@ describe('config layer', () => {
     expect(await put({ rss: [] }, ['Gaming', 'Custom Feeds'])).not.toContain('Custom Feeds');
   });
 
+  it('a new config with custom feeds lists Custom Feeds last, not first', async () => {
+    const app = await buildApp();
+    const res = await app.inject({ method: 'PUT', url: '/api/config', payload: { customSources: { rss: ['https://example.com/feed.xml'] } } });
+    const order: string[] = res.json().config.format.sectionOrder;
+    expect(order[0]).toBe('Gaming');
+    expect(order.at(-1)).toBe('Custom Feeds');
+  });
+
   it('never lists the primary engine in its own fallback chain', async () => {
     const app = await buildApp();
     const put = await app.inject({ method: 'PUT', url: '/api/config', payload: { llm: { primary: 'claude', fallbackChain: ['claude', 'gemini', 'gemini', 'ollama'] } } });

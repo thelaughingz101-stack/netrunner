@@ -5,12 +5,13 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { freshState } from './helpers.js';
 import { saveConfig } from '../src/config/store.js';
 import { db } from '../src/db/db.js';
-import { findDigest } from '../src/digests.js';
+import { DateTime } from 'luxon';
+import { findDigest, saveDigest } from '../src/digests.js';
 import { run, runPrompt, runStatus } from '../src/pipeline/run.js';
 import { getRun } from '../src/pipeline/runs.js';
 import { buildApp } from '../src/server/app.js';
 import { runRoutes } from '../src/server/routes/run.js';
-import type { LLMRequest, Provider } from '../src/pipeline/llm/types.js';
+import { LLMError, type LLMRequest, type Provider } from '../src/pipeline/llm/types.js';
 import type { DeliveryTarget } from '../src/pipeline/delivery/types.js';
 
 const fresh = () => new Date(Date.now() - 3600e3).toUTCString();
@@ -145,7 +146,8 @@ describe('full pipeline (fake feeds + scripted LLM)', () => {
     const gate = new Promise<void>(r => (release = r));
     const slow: Provider = { tier: 'gemini', unavailable: () => null, call: async () => { await gate; return { text: '## x', finishReason: 'STOP', truncated: false, model: 'g' }; } };
     const first = run({ trigger: 'cli', forceMode: 'morning', fetchText, feedTries: 1, engine: { providers: { gemini: slow }, tries: 1 }, targets: [] });
-    await new Promise(r => setTimeout(r, 50));
+    // Until the first run holds the lock (a fixed 50 ms wasn't always enough with the whole suite running).
+    while (!runStatus()) await new Promise(r => setTimeout(r, 10));
     const res = await app.inject({ method: 'POST', url: '/api/run', payload: { dryRun: true } });
     expect(res.statusCode).toBe(409);
     release();
@@ -170,5 +172,92 @@ describe('full pipeline (fake feeds + scripted LLM)', () => {
     expect(seen.deliver).toBe('Morning digest: Delivering');
     expect(runStatus()).toBeNull();
     expect((await app.inject({ method: 'GET', url: '/api/run/status' })).json()).toEqual({ running: null });
+  });
+});
+
+describe('big runs: one AI call per topic', () => {
+  const VERGE = `<?xml version="1.0"?><rss version="2.0"><channel><title>v</title>
+<item><title>Framework unveils modular laptop motherboard</title><link>https://www.theverge.com/framework</link><pubDate>${fresh()}</pubDate><description>a</description></item>
+<item><title>Raspberry Pi foundation ships compute module</title><link>https://www.theverge.com/pi</link><pubDate>${fresh()}</pubDate><description>b</description></item>
+</channel></rss>`;
+  const twoTopics = async (url: string) => url.includes('ign.com') ? { status: 200, text: RSS } : url.includes('theverge.com') ? { status: 200, text: VERGE } : { status: 404, text: '' };
+
+  /** Writes every story it's given under the first topic header of the prompt; throws for prompts matching `failOn`. */
+  function topicLlm(failOn?: RegExp, opts: { updates?: boolean } = {}) {
+    const calls: LLMRequest[] = [];
+    const stages: string[] = [];
+    const p: Provider = {
+      tier: 'gemini', unavailable: () => null,
+      async call(req) {
+        calls.push(req);
+        const st = runStatus();
+        if (st?.stage) stages.push(st.stage);
+        if (failOn?.test(req.prompt.system)) throw new LLMError('gemini HTTP 503: high demand', false, 503);
+        const ids = [...req.prompt.user.matchAll(/"id":"(N\d+)"/g)].map(m => m[1]);
+        const headers = req.prompt.system.slice(req.prompt.system.indexOf('REQUIRED HEADER ORDER')).split('\n').filter(l => l.startsWith('## '));
+        const topic = headers.find(h => !/Everything Else|EXCLUDED|Story Updates/.test(h)) ?? '## 📋 Everything Else';
+        // Nightly: an update for its topic when the call saw the morning digest, else the AI's usual "nothing to update".
+        const updates = !opts.updates ? '' : /MORNING/.test(req.prompt.user)
+          ? `## 🔄 Story Updates\n- [**Update on ${topic.replace(/^##\s*\S+\s*/, '')}**](u) — changed. *(S)*\n`
+          : '## 🔄 Story Updates\nNo prior morning digest was available, so there are no updates.\n';
+        return { text: `${updates}${topic}\n${ids.map(id => `- [**Story ${id}**](u) — x. *(S)* [#${id}]`).join('\n')}\n## 📋 Everything Else\n_Nothing outside the above sections._\n## 🗒️ EXCLUDED\nEXCLUDED: none`, finishReason: 'STOP', truncated: false, model: 'g' };
+      },
+    };
+    return { p, calls, stages };
+  }
+
+  beforeEach(() => {
+    freshState({ GEMINI_API_KEY: 'k', LLM_ITEMS_PER_CALL: 2, DATA_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'nr-split-')) });
+    saveConfig({ sources: {}, topics: { Gaming: true }, llm: { mode: 'llm', primary: 'gemini', fallbackChain: [] }, delivery: {} });
+  });
+
+  it('writes each topic in its own call and stitches them in section order', async () => {
+    const llm = topicLlm();
+    const out: any = await run({ trigger: 'cli', forceMode: 'morning', fetchText: twoTopics, feedTries: 1, engine: { providers: { gemini: llm.p }, tries: 1 }, targets: [] });
+    expect(llm.calls.filter(c => c.kind === 'digest')).toHaveLength(3); // Gaming, Tech & Hardware, searches for the other topics
+    const headers = out.digest.split('\n').filter((l: string) => l.startsWith('## '));
+    expect(headers.indexOf('## 🎮 Gaming')).toBeLessThan(headers.indexOf('## 🖥️ Tech & Hardware'));
+    expect(headers.filter((h: string) => /Everything Else/.test(h))).toHaveLength(1);
+    expect(headers.at(-1)).toBe('## 🗒️ EXCLUDED');
+    expect(out.digest).not.toMatch(/\[#N\d+\]/);
+    expect(out.stats.llm).toMatchObject({ calls: 3 });
+    expect(out.stats.coverage).toMatchObject({ calls: 3, expected: 5, forced: 0, finalAccounted: 5 });
+    expect(llm.stages).toContain('Writing by topic: 0 of 3 done · Gaming: Writing the digest with Gemini');
+  });
+
+  it("a topic whose call fails still leaves the rest of the digest, with a note and plain headlines", async () => {
+    const llm = topicLlm(/^## 🖥️ Tech & Hardware$/m);
+    const out: any = await run({ trigger: 'cli', forceMode: 'morning', fetchText: twoTopics, feedTries: 1, engine: { providers: { gemini: llm.p }, tries: 1 }, targets: [] });
+    expect(out.digest.startsWith("⚠️ **Some topics couldn't be written: Tech & Hardware.**")).toBe(true);
+    expect(out.digest).toContain('• Gemini was overloaded with requests.');
+    expect(out.digest).toContain('- [**Framework unveils modular laptop motherboard**](https://www.theverge.com/framework) *(The Verge)*');
+    expect(out.digest).toContain('## 🎮 Gaming');
+    expect(out.stats.llm).toMatchObject({ calls: 3, failedTopics: ['Tech & Hardware'] });
+  });
+
+  it('nightly: each topic call sees only its part of the morning digest; Story Updates comes only from calls that had one', async () => {
+    const today = DateTime.now().setZone('America/New_York').toISODate()!;
+    saveDigest({ date: today, mode: 'morning', content: '## 🎮 Gaming\n- [**GAMING-MORNING**](u) — x. *(IGN)*\n## 🖥️ Tech & Hardware\n- [**TECH-MORNING**](u) — y. *(The Verge)*\n## 📋 Everything Else\n- [**ELSE-MORNING**](u) — z. *(S)*' });
+    const llm = topicLlm(undefined, { updates: true });
+    const out: any = await run({ trigger: 'cli', forceMode: 'nightly', fetchText: twoTopics, feedTries: 1, engine: { providers: { gemini: llm.p }, tries: 1 }, targets: [] });
+    const digestCalls = llm.calls.filter(c => c.kind === 'digest');
+    const gaming = digestCalls.find(c => /^## 🎮 Gaming$/m.test(c.prompt.system))!;
+    const tech = digestCalls.find(c => /^## 🖥️ Tech & Hardware$/m.test(c.prompt.system))!;
+    expect(gaming.prompt.user).toContain('GAMING-MORNING');
+    expect(gaming.prompt.user).not.toContain('TECH-MORNING');
+    expect(tech.prompt.user).toContain('TECH-MORNING');
+    expect(tech.prompt.user).not.toContain('GAMING-MORNING');
+    const at = out.digest.indexOf('## 🔄 Story Updates');
+    const updates = out.digest.slice(at, out.digest.indexOf('\n## ', at + 5));
+    expect(updates).toContain('Update on Gaming');
+    expect(updates).toContain('Update on Tech & Hardware');
+    expect(updates).not.toContain('No prior morning digest');
+    expect(out.digest.match(/## 🔄 Story Updates/g)).toHaveLength(1);
+  });
+
+  it('if every topic call fails, the run fails with the plain-English reason', async () => {
+    const llm = topicLlm(/REQUIRED HEADER ORDER/);
+    await expect(run({ trigger: 'cli', forceMode: 'morning', fetchText: twoTopics, feedTries: 1, engine: { providers: { gemini: llm.p }, tries: 1 }, targets: [] }))
+      .rejects.toThrow(/No AI could write the digest/);
   });
 });

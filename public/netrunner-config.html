@@ -350,7 +350,8 @@ function renderMD(md) {
     .replace(/\*\((.+?)\)\*/g, '<em class="md-source">($1)</em>')
     .replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, '<em>$1</em>')
     .replace(/^---+$/gm, '<hr class="md-hr"/>')
-    .replace(/^- (.+)$/gm, '<li class="md-li">$1</li>');
+    // "- " and "* " bullets alike (the AI uses either); "**bold**" lines don't match: they have no space after the first *.
+    .replace(/^[-*] (.+)$/gm, '<li class="md-li">$1</li>');
   html = html.replace(/(<li class="md-li">.*?<\/li>\n?)+/gs, m => `<ul class="md-ul">${m}</ul>`);
   html = html.split(/\n{2,}/).map(block => {
     if (/^<(h1|h2|h3|ul|hr)/.test(block.trim())) return block;
@@ -372,6 +373,14 @@ const MD_STYLE = `
 .md-link:hover{border-bottom-color:#ff6d3a;}
 .md-source{color:#857579;font-style:italic;}
 .md-hr{border:none;border-top:1px solid #2c1d20;margin:1.6em 0;}
+.md-sec{margin:1.3em 0 0;}
+.md-sum{list-style:none;cursor:pointer;display:flex;align-items:center;gap:10px;font-size:1.22em;font-weight:700;padding-bottom:.35em;margin-bottom:.55em;border-bottom:1px solid #2c1d20;color:#f3eeec;user-select:none;}
+.md-sum::-webkit-details-marker{display:none;}
+.md-sum::before{content:"▾";color:#ff6d3a;font-size:.8em;transition:transform .15s;}
+details:not([open])>.md-sum{margin-bottom:0;}
+details:not([open])>.md-sum::before{transform:rotate(-90deg);}
+.md-sum:hover{color:#ff6d3a;}
+.md-count{font-family:'IBM Plex Mono',monospace;font-size:.58em;font-weight:400;color:#857579;border:1px solid #2c1d20;border-radius:3px;padding:1px 6px;}
 `;
 
 // Custom feeds live at the bottom of Sources ("Add your own"); Recaps live on the Schedule tab.
@@ -1442,11 +1451,34 @@ function viewDigest(md, hidden) {
   let cur = null;
   for (const line of (md || "").split("\n")) {
     if (/^##\s/.test(line)) cur = HIDEABLE.find(h => h.re.test(line))?.id || null;
-    if (cur && /^- /.test(line)) counts[cur] = (counts[cur] || 0) + 1;
+    if (cur && /^[-*] /.test(line)) counts[cur] = (counts[cur] || 0) + 1;
     if (cur && !counts[cur]) counts[cur] = 0;
     if (!cur || !hidden[cur]) out.push(line);
   }
   return { text: out.join("\n").replace(/\n+(?:---+\s*)?$/, "\n"), counts };
+}
+
+// Saved copy-paste prompts (manual-*) list the "## " headers inside the prompt text: they stay one flat page.
+function foldable(mode) {
+  return !/^manual/.test(mode || "");
+}
+
+// A digest's "## " sections, for the fold-out reader. pre = anything before the first header (banners, notes).
+function splitSections(md) {
+  const pre = [], raw = [];
+  for (const line of (md || "").split("\n")) {
+    if (/^##\s/.test(line)) raw.push({ title: line.replace(/^##\s*/, ""), lines: [] });
+    else (raw.length ? raw[raw.length - 1].lines : pre).push(line);
+  }
+  return {
+    pre: pre.join("\n").trim(),
+    sections: raw.map(s => ({
+      title: s.title,
+      key: s.title.replace(/[^\p{L}\p{N}&]+/gu, " ").trim().toLowerCase(),
+      count: s.lines.filter(l => /^[-*] /.test(l)).length,
+      body: s.lines.join("\n"),
+    })),
+  };
 }
 
 function OutputTab({ entries, selectedId, onSelect, onRemove, onImport, showDefaults }) {
@@ -1457,6 +1489,14 @@ function OutputTab({ entries, selectedId, onSelect, onRemove, onImport, showDefa
   const dates = Object.keys(grouped).sort().reverse();
   const selected = entries.find(e => e.id === selectedId) || entries[0] || null;
   const view = selected ? viewDigest(selected.content, { excluded: !show.excluded, everythingElse: !show.everythingElse }) : null;
+  const parts = view && foldable(selected.mode) ? splitSections(view.text) : null;
+  // Folded sections, remembered by name (e.g. keep Comics folded every day). Storage may be unavailable.
+  const [collapsed, setCollapsed] = useState(() => { try { return JSON.parse(localStorage.getItem("nr_collapsed") || "{}"); } catch { return {}; } });
+  useEffect(() => { try { localStorage.setItem("nr_collapsed", JSON.stringify(collapsed)); } catch {} }, [collapsed]);
+  const saveCollapsed = next => setCollapsed(next);
+  // Functional update: two folds before a re-render (toggle events arrive async) must both stick.
+  const toggleSection = (key, closed) => setCollapsed(prev => (!!prev[key] === closed ? prev : { ...prev, [key]: closed || undefined }));
+  const readerBtn = { ...s.btn, fontSize:13, padding:"6px 12px", background:"transparent", color:C.muted, border:`1px solid ${C.border}` };
 
   const MODE_ICON = {
     morning:"🌅", nightly:"🌙", weekly:"📅", monthly:"🗓️", manual:"📄",
@@ -1515,6 +1555,10 @@ function OutputTab({ entries, selectedId, onSelect, onRemove, onImport, showDefa
                     {catchUpLabel(selected) && <div style={{ fontFamily:F.body, fontSize:12.5, color:C.orange, marginTop:2 }}>Catch-up range: {catchUpLabel(selected).replace(/^covers the /, "")}</div>}
                   </div>
                   <div style={{ marginLeft:"auto", display:"flex", gap:8, flexWrap:"wrap", justifyContent:"flex-end" }}>
+                    {parts && parts.sections.length > 1 && <>
+                      <button onClick={() => saveCollapsed(Object.fromEntries(parts.sections.map(sec => [sec.key, true])))} style={readerBtn}>Collapse all</button>
+                      <button onClick={() => saveCollapsed({})} style={readerBtn}>Expand all</button>
+                    </>}
                     {HIDEABLE.filter(h => view.counts[h.id] !== undefined).map(h => (
                       <button key={h.id} onClick={() => setShow(v => ({ ...v, [h.id]: !v[h.id] }))} style={{ ...s.btn, fontSize:13, padding:"6px 12px", background:"transparent", color: show[h.id] ? C.orange : C.muted, border:`1px solid ${show[h.id] ? C.orangeLn : C.border}` }}>
                         {show[h.id] ? "Hide" : "Show"} {h.label} ({view.counts[h.id]})
@@ -1522,7 +1566,15 @@ function OutputTab({ entries, selectedId, onSelect, onRemove, onImport, showDefa
                     ))}
                   </div>
                 </div>
-                <div className="md-reader" dangerouslySetInnerHTML={{ __html: renderMD(view.text) }} />
+                {!parts ? <div className="md-reader" dangerouslySetInnerHTML={{ __html: renderMD(view.text) }} /> : <div className="md-reader">
+                  {parts.pre && <div dangerouslySetInnerHTML={{ __html: renderMD(parts.pre) }} />}
+                  {parts.sections.map(sec => (
+                    <details key={sec.key} className="md-sec" open={!collapsed[sec.key]} onToggle={e => toggleSection(sec.key, !e.currentTarget.open)}>
+                      <summary className="md-sum">{sec.title}{sec.count > 0 && <span className="md-count">{sec.count}</span>}</summary>
+                      <div dangerouslySetInnerHTML={{ __html: renderMD(sec.body) }} />
+                    </details>
+                  ))}
+                </div>}
               </>
             ) : (
               <div style={{ color:C.muted, fontFamily:F.body, fontSize:14, textAlign:"center", padding:"40px 0" }}>Select an entry to view it.</div>

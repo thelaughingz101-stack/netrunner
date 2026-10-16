@@ -72,9 +72,9 @@ You only need a key for the AI you actually use. Changes take effect immediately
 | **Sources** | Individual sites and channels per topic, with full names (e.g. *Centers for Disease Control and Prevention (CDC)*). *Skip filler* drops YouTube Shorts and promo clips. *Add your own* takes any RSS feed or YouTube channel. |
 | **Format** | Summary length (1 sentence, 2–3, or full), language, and section order. |
 | **AI Writer** | Autopilot or Free Copy-Paste, which AI to use first, backups if it fails, and your keys. |
-| **Schedule** | Turn automatic digests on or off, times, timezone, how far back to look, and weekly/monthly recaps. |
+| **Schedule** | Turn automatic digests on or off, times, timezone, how far back to look, and weekly/monthly recaps. How far back to look also sets how much goes in: longer ranges take more stories per source and per topic (12 hours: 8 per source and 25 per topic, up to 1 month: 50 and 80), keeping the stories the most outlets covered, then the newest. |
 | **Delivery** | Discord, email, save to file, and *Open in NetRunner* (opens the app on each new scheduled digest). |
-| **Output** | Every digest NetRunner has made, ready to read. |
+| **Output** | Every digest NetRunner has made, ready to read. Click a topic's header to fold it away (*Collapse all* / *Expand all* do every topic); NetRunner remembers what you folded. |
 
 The bar at the bottom has **Run News Digest**, **Undo changes** and **Save**. Save lights up (and *Unsaved changes* shows) only when something on screen differs from your saved settings. While a digest runs, from the button or the schedule, hover **Running…** to see what it's doing (e.g. *Fetching sources (64 of 112)*, *Writing the digest with Gemini*).
 
@@ -128,7 +128,7 @@ On Windows, the secrets (`GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, `DISCORD_WEBHOOK
 | Ollama address | `OLLAMA_URL` (model: `OLLAMA_MODEL`) |
 | Discord webhook URL | `DISCORD_WEBHOOK_URL` |
 | Email sending account | `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`, `EMAIL_FROM`, `EMAIL_TO` |
-| (not in the app) | `PORT`, `HOST`, `ALLOWED_HOSTS`, `DATA_DIR`, `SCHEDULER`, `LOG_LEVEL`, timeouts, `LEGACY_CONFIG_PATH` |
+| (not in the app) | `PORT`, `HOST`, `ALLOWED_HOSTS`, `DATA_DIR`, `SCHEDULER`, `LOG_LEVEL`, timeouts, `LEGACY_CONFIG_PATH`, `LLM_ITEMS_PER_CALL` (more stories than this in one run, default 150: the digest is written one topic per AI call, 3 at a time, then stitched together) |
 
 See `.env.example` for what each one does. `ALLOWED_HOSTS` matters only if you reach NetRunner by a hostname other than `localhost` or an IP address. Other names are refused, which blocks DNS-rebinding attacks.
 

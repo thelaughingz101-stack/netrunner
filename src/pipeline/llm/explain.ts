@@ -30,6 +30,9 @@ export function whyFailed(a: AttemptLog): Why {
   if (a.status === 503 || a.status === 529 || has(/overloaded|high demand|UNAVAILABLE/i)) {
     return { what: 'was overloaded with requests', fix: `That's on ${COMPANY[a.tier]}'s side and usually clears up within minutes: run it again later.` };
   }
+  if (has(/repeating itself/)) {
+    return { what: 'got stuck repeating itself' };
+  }
   if (has(/timed out/i)) {
     return { what: 'took too long to answer', fix: 'Run it again, or turn off some topics or sources so the digest is smaller.' };
   }

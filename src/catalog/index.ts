@@ -1,11 +1,10 @@
 import { FEEDS } from './feeds.generated.js';
 import { EXTRA_FEEDS, FEED_OVERRIDES, SOURCE_LABELS } from './feeds.extra.js';
-import { SOURCE_MAP as GEN_SOURCE_MAP, YOUTUBE_AUTHORS as GEN_YT, XCANCEL_USERS as GEN_XCANCEL, PER_SOURCE_CAP } from './sourceMap.generated.js';
+import { SOURCE_MAP as GEN_SOURCE_MAP, YOUTUBE_AUTHORS as GEN_YT, XCANCEL_USERS as GEN_XCANCEL } from './sourceMap.generated.js';
 import { EXTRA_SOURCE_MAP, EXTRA_YOUTUBE_AUTHORS } from './sourceMap.extra.js';
 import type { FeedDef, FeedKind, SourceTag } from './types.js';
 
 export type { FeedDef, FeedKind, SourceTag };
-export { PER_SOURCE_CAP };
 
 /**
  * Topics folded into another one: the generated (n8n) feeds and tags still name the old topic, and saved

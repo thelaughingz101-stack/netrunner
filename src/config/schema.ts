@@ -95,12 +95,6 @@ export function normalizeConfig(input: unknown): Config {
   c.format.sectionOrder = c.format.sectionOrder.filter(t => !(t in MERGED_TOPICS));
   for (const t of TOPICS) if (c.topics[t] === undefined) c.topics[t] = true;
   if (c.sources) for (const k of allToggleKeys()) if (c.sources[k] === undefined) c.sources[k] = true;
-  // Custom Feeds is a section exactly when there are custom sources (the Format tab did this on open, which
-  // made just viewing it count as an unsaved change).
-  const cs = c.customSources;
-  const hasCustom = cs.rss.length + cs.youtube.length + cs.xcancel.length > 0;
-  if (hasCustom && !c.format.sectionOrder.includes('Custom Feeds')) c.format.sectionOrder.push('Custom Feeds');
-  if (!hasCustom) c.format.sectionOrder = c.format.sectionOrder.filter(t => t !== 'Custom Feeds');
   // A topic missing from the order (new since it was saved) goes after the topic before it in TOPICS, so a new
   // Health lands next to Science & Space rather than after everything else.
   for (const [i, t] of TOPICS.entries()) {
@@ -108,6 +102,12 @@ export function normalizeConfig(input: unknown): Config {
     const prev = i > 0 ? c.format.sectionOrder.indexOf(TOPICS[i - 1]) : -1;
     c.format.sectionOrder.splice(prev < 0 ? c.format.sectionOrder.length : prev + 1, 0, t);
   }
+  // Custom Feeds is a section exactly when there are custom sources (the Format tab did this on open, which
+  // made just viewing it count as an unsaved change). After the topics, so a new config lists it last.
+  const cs = c.customSources;
+  const hasCustom = cs.rss.length + cs.youtube.length + cs.xcancel.length > 0;
+  if (hasCustom && !c.format.sectionOrder.includes('Custom Feeds')) c.format.sectionOrder.push('Custom Feeds');
+  if (!hasCustom) c.format.sectionOrder = c.format.sectionOrder.filter(t => t !== 'Custom Feeds');
 
   // Chain never repeats the primary and never lists an engine twice.
   c.llm.fallbackChain = [...new Set(c.llm.fallbackChain)].filter(e => e !== c.llm.primary);

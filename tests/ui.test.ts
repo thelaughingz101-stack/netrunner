@@ -61,9 +61,34 @@ describe('uniformity pass (Oct 2026)', () => {
     expect(src).not.toMatch(/label="(📋|🗒️) /);
   });
 
+  it('Output: each topic folds open and shut, with Collapse all / Expand all, remembered between visits', () => {
+    expect(src).toContain('function splitSections');
+    expect(src).toMatch(/<details[^>]*className="md-sec"/);
+    expect(src).toContain('Collapse all');
+    expect(src).toContain('Expand all');
+    expect(src).toContain('nr_collapsed');
+  });
+
   it('shows full source names and the running digest step on hover', () => {
     expect(src).toContain('LABELS[src] || src');
     expect(src).toContain('function RunButton');
     expect(src).not.toContain('<ActionBar />');
+  });
+});
+
+describe('Output reader (the page functions, run for real)', () => {
+  const block = src.slice(src.indexOf('const HIDEABLE = ['), src.indexOf('function OutputTab('));
+  const page = () => new Function(`${block}; return { viewDigest, splitSections, foldable };`)();
+
+  it('saved copy-paste prompts stay one flat page: their ## lines are part of the prompt, not sections', () => {
+    expect(page().foldable('manual-claude')).toBe(false);
+    expect(page().foldable('manual')).toBe(false);
+    expect(page().foldable('nightly')).toBe(true);
+  });
+
+  it('counts "* " bullets like "- " ones, so the Hide button and the fold agree', () => {
+    const md = '## 📋 Everything Else\n* [**A**](u) — a. *(S)*\n* [**B**](u) — b. *(S)*';
+    expect(page().viewDigest(md, {}).counts.everythingElse).toBe(2);
+    expect(page().splitSections(md).sections[0].count).toBe(2);
   });
 });

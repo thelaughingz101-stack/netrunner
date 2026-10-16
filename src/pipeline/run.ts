@@ -6,8 +6,8 @@ import { db } from '../db/db.js';
 import { findDigest, saveDigest } from '../digests.js';
 import { log as rootLog } from '../logger.js';
 import { developingStories, headlinesFromRun, updateTracker } from '../stories/tracker.js';
-import { assignIds, forDelivery, ID_RULE, stripTags, withIdRule } from './coverage/coverage.js';
-import { ensureCoverage } from './coverage/index.js';
+import { assignIds, dedupeBullets, forDelivery, stripTags } from './coverage/coverage.js';
+import { writeDigest } from './write.js';
 import { deliverAll, type DeliveryResult } from './delivery/registry.js';
 import type { DeliveryTarget } from './delivery/types.js';
 import { ingest } from './ingest/index.js';
@@ -15,7 +15,7 @@ import type { FetchText } from './ingest/fetchFeeds.js';
 import { AllTiersFailedError, generate, llmTimeoutFor, type EngineOptions } from './llm/engine.js';
 import { attemptStage } from './llm/explain.js';
 import { resolveMode, type ModeRequest } from './mode.js';
-import { buildLlmPayload, buildManualPrompt, type ManualOutput } from './prompt/index.js';
+import { buildManualPrompt, type ManualOutput } from './prompt/index.js';
 import { monthlyPrompt, weeklyPrompt } from './rollups.js';
 import { createRun, finishRun, recordSkipped, type Trigger } from './runs.js';
 import type { Mode, RunContext } from './types.js';
@@ -166,24 +166,19 @@ async function digestRun(mode: Mode, lookbackWindow: string, opts: RunOptions): 
     const developing = mode === 'nightly' ? developingStories(ctx.today) : [];
     ctx.stats.continuity = { morningDigestFound: !!morningDigest, developingStories: developing.length };
 
-    const prompt = withIdRule(buildLlmPayload({ mode, items, morningDigest }, config, developing));
-    const first = await generate({ kind: 'digest', prompt, idRule: ID_RULE }, config, ctx.log, engine);
-    ctx.stats.llm = { tier: first.tier, model: first.model, finishReason: first.finishReason, truncated: first.truncated, attempts: first.attempts };
-
-    const coverage = items.length
-      ? await ensureCoverage(ctx, items, prompt, first, engine)
-      : { digest: first.text, placements: new Map(), forced: 0, rounds: [], extraTiers: [] };
-    const digest = stripTags(coverage.digest);
+    const written = await writeDigest(ctx, { mode, items, morningDigest, developing }, engine);
+    // Repeated bullets come from an AI stuck in a loop; drop them whatever the run size.
+    const digest = dedupeBullets(stripTags(written.digest)).md;
 
     const digestId = saveDigest({ runId: ctx.runId, date: ctx.today, mode, content: digest, dryRun: ctx.dryRun });
     if (!ctx.dryRun) {
-      ctx.stats.stories = updateTracker(headlinesFromRun(items, coverage.placements, coverage.digest), ctx.today);
+      ctx.stats.stories = updateTracker(headlinesFromRun(items, written.placements, written.digest), ctx.today);
     }
     // The saved digest keeps every section; deliveries drop EXCLUDED / Everything Else when Format hides them.
     const delivered = forDelivery(digest, config.format);
     ctx.progress?.('Delivering');
     const delivery = await deliverAll({ digest: delivered, mode, lookbackWindow }, ctx, opts.targets);
-    return { runId: ctx.runId, mode, date: ctx.today, digest, digestId, llmTier: first.tier, delivery, stats: ctx.stats };
+    return { runId: ctx.runId, mode, date: ctx.today, digest, digestId, llmTier: written.tier, delivery, stats: ctx.stats };
   });
 }
 

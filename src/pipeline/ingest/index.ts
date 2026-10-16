@@ -7,13 +7,14 @@ import { buildFeedList } from './feedList.js';
 import { deadFeedReport, fetchFeeds, type FetchText } from './fetchFeeds.js';
 import { normalize } from './normalize.js';
 import { clusterSameStory, contentFilter, dedupeAndSort, mergeAcrossCategories, timeWindow, topicFilter } from './filters.js';
+import { capPerSource, limitPerTopic, perSourceCap, perTopicLimit } from './limits.js';
 
 export interface IngestResult {
   items: Item[];
   feedResults: FeedResult[];
 }
 
-/** Feed List → RSS Read → Shorts/Promo filter → Normalize & Tag → Time Window → Dedup + Sort → Clustering → Topic Toggles → Cross-category merge. */
+/** Feed List → RSS Read → Shorts/Promo filter → Normalize & Tag → Time Window → Dedup + Sort → Per-source cap → Clustering → Topic Toggles → Cross-category merge → Per-topic limit. */
 export async function ingest(ctx: RunContext, opts: { fetchText?: FetchText; tries?: number } = {}): Promise<IngestResult> {
   const { config, log } = ctx;
   const { feeds, skippedXCancel } = buildFeedList(config);
@@ -36,10 +37,14 @@ export async function ingest(ctx: RunContext, opts: { fetchText?: FetchText; tri
   const norm = normalize(cf.articles, ctx.mode);
   const win = timeWindow(norm.items, ctx.lookbackWindow, ctx.now.getTime());
   const dd = dedupeAndSort(win.items);
-  const cl = clusterSameStory(dd.items);
+  // After the window and newest-first: each source keeps its newest stories inside the range (n8n capped
+  // first, so a source could fill its 8 with stories the window then threw away).
+  const cap = capPerSource(dd.items, perSourceCap(ctx.lookbackWindow));
+  const cl = clusterSameStory(cap.items);
   const tf = topicFilter(cl.items, config);
   // After the toggles, so a merged story never lands in a section that's switched off.
   const xc = mergeAcrossCategories(tf.items);
+  const lim = limitPerTopic(xc.items, perTopicLimit(ctx.lookbackWindow));
 
   const stats = {
     feedsAttempted: feeds.length,
@@ -50,21 +55,22 @@ export async function ingest(ctx: RunContext, opts: { fetchText?: FetchText; tri
     articlesFetched: articles.length,
     droppedShorts: cf.droppedShorts,
     droppedPromotional: cf.droppedPromo,
-    droppedPerSourceCap: norm.capped,
+    droppedPerSourceCap: cap.capped,
     droppedOutsideWindow: win.dropped,
     windowFallbackUsed: win.usedFallback,
     droppedDuplicates: dd.duplicates,
     mergedIntoClusters: cl.merged,
     droppedTopicOff: tf.dropped,
     mergedAcrossCategories: xc.merged,
-    itemsKept: xc.items.length,
+    droppedTopicLimit: lim.dropped,
+    itemsKept: lim.items.length,
   };
   ctx.stats.ingest = stats;
   log.info(stats, 'ingestion complete');
   if (failed.length) log.warn({ dead: failed.map(f => ({ feed: f.feed, code: f.code })) }, `${failed.length} dead feeds`);
 
   recordFeedResults(ctx, results);
-  return { items: xc.items, feedResults: results };
+  return { items: lim.items, feedResults: results };
 }
 
 function recordFeedResults(ctx: RunContext, results: FeedResult[]) {

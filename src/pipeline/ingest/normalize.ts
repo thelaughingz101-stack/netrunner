@@ -1,5 +1,5 @@
 // Port of n8n "Normalize & Tag" — logic unchanged (the maps live in src/catalog).
-import { PER_SOURCE_CAP, SOURCE_MAP, XCANCEL_USERS, YOUTUBE_AUTHORS, type SourceTag } from '../../catalog/index.js';
+import { SOURCE_MAP, XCANCEL_USERS, YOUTUBE_AUTHORS, type SourceTag } from '../../catalog/index.js';
 import type { Item, RawArticle } from '../types.js';
 
 const strip = (s?: string) => (s || '').replace(/<[^>]*>/g, '').trim().slice(0, 400);
@@ -43,20 +43,12 @@ export function tagSource(a: RawArticle): { link: string; src: SourceTag } {
   return { link, src };
 }
 
-export function normalize(articles: RawArticle[], mode: string): { items: Item[]; capped: number } {
-  const counts: Record<string, number> = {};
+// n8n also capped each source at 8 here, before the time window; the cap now runs after it and grows with the
+// catch-up range (limits.ts).
+export function normalize(articles: RawArticle[], mode: string): { items: Item[] } {
   const out: Item[] = [];
-  let capped = 0;
   for (const a of articles) {
     const { link, src } = tagSource(a);
-
-    // Per-source cap only applies to built-in, recognized sources. Custom Feeds (unrecognized
-    // YouTube channels, xcancel handles, or RSS domains) are hand-picked and never share a quota.
-    if (src.category !== 'Custom Feeds') {
-      counts[src.name] = (counts[src.name] || 0) + 1;
-      if (counts[src.name] > PER_SOURCE_CAP) { capped++; continue; }
-    }
-
     let title = a.title || '';
     if (link.includes('/shorts/')) title = title + ' [SHORT]';
     out.push({
@@ -69,5 +61,5 @@ export function normalize(articles: RawArticle[], mode: string): { items: Item[]
       summary: strip(a.contentSnippet || a.content || a.summary || a.description || ''),
     });
   }
-  return { items: out, capped };
+  return { items: out };
 }

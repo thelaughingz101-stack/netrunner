@@ -34,6 +34,8 @@ const EnvSchema = z.object({
   LLM_TIMEOUT_MAX_MS: int(1_800_000),
   LLM_MAX_TRIES: int(5),
   LLM_RETRY_DELAY_MS: int(5_000),
+  // More stories than this in one run → one AI call per topic (one call can't write ~560 stories).
+  LLM_ITEMS_PER_CALL: int(150),
   FEED_TIMEOUT_MS: int(20_000),
   FEED_CONCURRENCY: int(8),
 

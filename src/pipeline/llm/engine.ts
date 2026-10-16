@@ -33,12 +33,40 @@ export class AllTiersFailedError extends Error {
 
 export const tierOrder = (config: Config): Tier[] => [...new Set([config.llm.primary, ...config.llm.fallbackChain])] as Tier[];
 
+/**
+ * Wait before the next try. When the AI says it's overloaded or rate-limited, wait longer each time (5 s,
+ * 15 s, 45 s, then 2 min) so a demand spike can pass: the 2026-10-16 08:00 run spent all 5 tries inside two
+ * minutes of Gemini "high demand". Other retryable errors keep the flat delay.
+ */
+export function retryDelay(base: number, attempt: number, status?: number, message = ''): number {
+  const busy = status === 429 || status === 503 || status === 529 || /overloaded|high demand|RESOURCE_EXHAUSTED/i.test(message);
+  return busy ? Math.min(base * 3 ** (attempt - 1), 120_000) : base;
+}
+
 type TimeoutEnv = Pick<ReturnType<typeof env>, 'LLM_TIMEOUT_MS' | 'LLM_TIMEOUT_PER_SOURCE_MS' | 'LLM_TIMEOUT_MAX_MS'>;
 
 /** Per-call timeout for a digest built from `sources` feeds (custom ones included). The digest's length —
  *  and so the model's writing time — grows with the source count (~1.4s each measured on Gemini Flash). */
 export function llmTimeoutFor(sources: number, e: TimeoutEnv = env()): number {
   return Math.min(e.LLM_TIMEOUT_MAX_MS, Math.max(e.LLM_TIMEOUT_MS, sources * e.LLM_TIMEOUT_PER_SOURCE_MS));
+}
+
+/** A piece of 1–20 characters repeated into a run of 200+: no real digest line has one. */
+const RUNAWAY = /(.{1,20}?)\1{9,}/g;
+const RUNAWAY_MIN = 200;
+
+/**
+ * Drops the lines where the AI got stuck repeating itself. On 2026-10-16 Gemini made up a Facebook link for a
+ * Comics release and wrote ~35,000 "2"s into it: pages of them in the digest. The run can span several lines
+ * (Gemini's text parts are joined with newlines), and each of those lines is dropped.
+ */
+export function dropRunaways(text: string): { text: string; dropped: number } {
+  let dropped = 0;
+  const kept = text.split('\n').filter(line => {
+    for (const m of line.matchAll(RUNAWAY)) if (m[0].length >= RUNAWAY_MIN) { dropped++; return false; }
+    return true;
+  });
+  return { text: dropped ? kept.join('\n') : text, dropped };
 }
 
 const truncationBanner = (tier: Tier, text: string) =>
@@ -58,6 +86,7 @@ export async function generate(req: LLMRequest, config: Config, log: Logger, opt
 
   const attempts: AttemptLog[] = [];
   let truncatedFallback: { tier: Tier; out: ProviderOutput } | null = null;
+  let loopedFallback: { tier: Tier; out: ProviderOutput } | null = null;
   let firstTried: Tier | undefined;
 
   for (const tier of tierOrder(config)) {
@@ -68,6 +97,7 @@ export async function generate(req: LLMRequest, config: Config, log: Logger, opt
       log.warn({ tier, kind: req.kind, reason: why }, 'LLM tier skipped');
       continue;
     }
+    let loopedOnce = false;
     for (let attempt = 1; attempt <= tries; attempt++) {
       const t0 = Date.now();
       const signal = AbortSignal.timeout(timeoutMs);
@@ -75,7 +105,22 @@ export async function generate(req: LLMRequest, config: Config, log: Logger, opt
       const previous = attempts.filter(a => !a.ok && !a.skipped).at(-1);
       opts.onAttempt?.({ tier, attempt, of: tries, kind: req.kind, ...(tier !== firstTried ? { fallbackFrom: firstTried } : {}), ...(previous ? { previous } : {}) });
       try {
-        const out = await p.call(req, signal);
+        const raw = await p.call(req, signal);
+        const { text, dropped } = dropRunaways(raw.text);
+        const out = dropped ? { ...raw, text } : raw;
+        if (dropped && !out.truncated) {
+          // The rest of a looping answer is often muddled too (on 2026-10-16 Gemini started the Comics section over
+          // and wrote it twice), so ask again once, then the next AI; failing those, ship it minus the broken lines.
+          const error = `got stuck repeating itself (${dropped} broken line${dropped === 1 ? '' : 's'} dropped)`;
+          attempts.push({ tier, attempt, ok: false, ms: Date.now() - t0, finishReason: out.finishReason, error });
+          loopedFallback ??= { tier, out };
+          const again = !loopedOnce && attempt < tries;
+          log.warn({ tier, attempt, kind: req.kind, dropped }, again ? 'LLM got stuck repeating itself — asking again' : 'LLM got stuck repeating itself again — trying next tier');
+          if (!again) break;
+          loopedOnce = true;
+          await sleep(delay);
+          continue;
+        }
         const rec: AttemptLog = { tier, attempt, ok: true, ms: Date.now() - t0, finishReason: out.finishReason };
         attempts.push(rec);
         if (out.truncated) {
@@ -97,11 +142,17 @@ export async function generate(req: LLMRequest, config: Config, log: Logger, opt
         const more = le.retryable && attempt < tries;
         log.warn({ tier, attempt, kind: req.kind, status: le.status, retryable: le.retryable, err: le.message }, more ? 'LLM attempt failed — retrying' : 'LLM tier failed');
         if (!more) break;
-        await sleep(delay);
+        await sleep(retryDelay(delay, attempt, le.status, le.message));
       }
     }
   }
 
+  if (loopedFallback) {
+    // Complete apart from the dropped lines (feed stories in them come back through the coverage check).
+    const { tier, out } = loopedFallback;
+    log.warn({ tier, kind: req.kind }, 'no tier answered without looping — shipping the answer minus the broken lines');
+    return { tier, model: out.model, text: out.text, finishReason: out.finishReason, truncated: false, attempts };
+  }
   if (truncatedFallback) {
     const { tier, out } = truncatedFallback;
     log.warn({ tier, kind: req.kind }, 'no tier finished cleanly — shipping truncated output with warning banner');

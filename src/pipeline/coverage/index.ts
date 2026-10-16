@@ -3,9 +3,18 @@ import { generate, type EngineOptions } from '../llm/engine.js';
 import type { LLMResult } from '../llm/types.js';
 import type { DigestPrompt } from '../prompt/index.js';
 import type { Item, RunContext } from '../types.js';
-import { diffCoverage, forcePlace, ID_RULE, mergeRecovery, recoveryPrompt, removeUntaggedMentions } from './coverage.js';
+import { diffCoverage, forcePlace, ID_RULE, mergeRecovery, normalizeTags, recoveryPrompt, removeUntaggedMentions } from './coverage.js';
 
 export const MAX_RECOVERY_ROUNDS = 2;
+
+export interface CoverageStats {
+  expected: number;
+  firstPassMissing: number;
+  unknownIdsInOutput: number;
+  rounds: CoverageOutcome['rounds'];
+  forced: number;
+  finalAccounted: number;
+}
 
 export interface CoverageOutcome {
   digest: string;              // still tagged — strip before delivery
@@ -13,6 +22,8 @@ export interface CoverageOutcome {
   rounds: { round: number; missingBefore: number; tier?: string; recovered: number; error?: string }[];
   forced: number;
   extraTiers: string[];
+  /** Also stored as ctx.stats.coverage; returned because per-topic calls run concurrently. */
+  stats: CoverageStats;
 }
 
 /**
@@ -25,7 +36,7 @@ export async function ensureCoverage(
 ): Promise<CoverageOutcome> {
   const ids = items.map(i => i.id!);
   const byId = new Map(items.map(i => [i.id!, i]));
-  let digest = first.text;
+  let digest = normalizeTags(first.text);
   const initial = diffCoverage(digest, ids);
   const placements: CoverageOutcome['placements'] = new Map(initial.found);
   const rounds: CoverageOutcome['rounds'] = [];
@@ -41,12 +52,13 @@ export async function ensureCoverage(
     try {
       const res = await generate({ kind: 'recovery', prompt: recoveryPrompt(prompt, missing.map(id => byId.get(id)!)), idRule: ID_RULE }, ctx.config, ctx.log, engineOpts);
       extraTiers.push(res.tier);
-      const got = diffCoverage(res.text, missing);
+      const text = normalizeTags(res.text);
+      const got = diffCoverage(text, missing);
       const recoveredIds = [...got.found.keys()];
       if (recoveredIds.length) {
         const cleaned = removeUntaggedMentions(digest, recoveredIds.map(id => byId.get(id)!));
         if (cleaned.removed) ctx.log.info({ round, removed: cleaned.removed }, 'removed untagged duplicate mentions of recovered items');
-        digest = mergeRecovery(cleaned.digest, res.text);
+        digest = mergeRecovery(cleaned.digest, text);
       }
       for (const id of recoveredIds) placements.set(id, got.found.get(id) === 'excluded' ? 'excluded' : 'recovered');
       missing = got.missing;
@@ -65,7 +77,7 @@ export async function ensureCoverage(
     ctx.log.warn({ forced: missing.length }, 'items still missing after recovery — placed under Everything Else without a summary');
   }
 
-  ctx.stats.coverage = {
+  const stats: CoverageStats = {
     expected: ids.length,
     firstPassMissing: initial.missing.length,
     unknownIdsInOutput: initial.unknown.length,
@@ -73,11 +85,12 @@ export async function ensureCoverage(
     forced: missing.length,
     finalAccounted: placements.size,
   };
+  ctx.stats.coverage = stats;
   recordItems(ctx, items, placements);
-  return { digest, placements, rounds, forced: missing.length, extraTiers };
+  return { digest, placements, rounds, forced: missing.length, extraTiers, stats };
 }
 
-function recordItems(ctx: RunContext, items: Item[], placements: CoverageOutcome['placements']) {
+export function recordItems(ctx: RunContext, items: Item[], placements: CoverageOutcome['placements']) {
   const ins = db().prepare('INSERT OR REPLACE INTO run_items (run_id, item_id, source, category, title, link, published, placement) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
   db().transaction(() => {
     for (const i of items) ins.run(ctx.runId, i.id, i.source, i.category, i.title, i.link, i.published, placements.get(i.id!) ?? 'missing');

@@ -27,6 +27,7 @@ describe('AI failures in plain words', () => {
     expect(why({ error: 'gemini network error: fetch failed' })).toMatchObject({ what: "couldn't be reached", fix: expect.stringMatching(/internet connection/) });
     expect(why({ tier: 'ollama', error: 'ollama unreachable at http://localhost:11434: ECONNREFUSED' }).what).toBe("isn't running on this PC");
     expect(why({ status: 500, error: 'gemini HTTP 500: internal' }).what).toBe('had a server error');
+    expect(why({ error: 'got stuck repeating itself (3 broken lines dropped)' }).what).toBe('got stuck repeating itself');
     expect(why({ error: 'something nobody has seen before' }).what).toBe('failed: something nobody has seen before');
   });
 

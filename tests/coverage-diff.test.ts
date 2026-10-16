@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { freshState } from './helpers.js';
 import { normalizeConfig } from '../src/config/schema.js';
-import { assignIds, diffCoverage, forcePlace, mergeRecovery, recoveryPrompt, removeUntaggedMentions, stripTags, withIdRule, ID_RULE } from '../src/pipeline/coverage/coverage.js';
+import { assignIds, diffCoverage, forcePlace, mergeRecovery, normalizeTags, recoveryPrompt, removeUntaggedMentions, stripTags, withIdRule, ID_RULE } from '../src/pipeline/coverage/coverage.js';
 import { ensureCoverage } from '../src/pipeline/coverage/index.js';
 import { createRun } from '../src/pipeline/runs.js';
 import { LLMError, type LLMRequest, type Provider } from '../src/pipeline/llm/types.js';
@@ -33,6 +33,13 @@ describe('ID assignment + diff', () => {
     expect(Object.fromEntries(r.found)).toEqual({ N001: 'section', N002: 'section', N003: 'excluded' });
     expect(r.missing).toEqual(['N004', 'N005']);
     expect(r.unknown).toEqual(['N999']);
+  });
+
+  it('rewrites the tag in the ways Gemini words it into the [#N…] form (2026-10-16: "[cite: N034]")', () => {
+    expect(normalizeTags('- a [cite: N034]\n- b [cite: N035, N036]\n- c [N037]\n- d [#N038]\n- e [cite:N039]\n- f [ #N040 , #N041 ]'))
+      .toBe('- a [#N034]\n- b [#N035][#N036]\n- c [#N037]\n- d [#N038]\n- e [#N039]\n- f [#N040][#N041]');
+    const other = '- [N64 Classic](https://x.dev/n64) and [cite: 2] stay as they are';
+    expect(normalizeTags(other)).toBe(other);
   });
 
   it('counts an item as placed in a section even if EXCLUDED also mentions it', () => {
@@ -204,6 +211,18 @@ describe('ensureCoverage (end-to-end with a scripted LLM)', () => {
       { tier: 'gemini', model: 'g', text: DIGEST, finishReason: 'STOP', truncated: false, attempts: [] }, opts(p));
     expect(seen).toHaveLength(0);
     expect(out.rounds).toEqual([]);
+  });
+
+  it("counts Gemini's own [cite: N…] tags, so those stories aren't written a second time", async () => {
+    const items = mk(4);
+    const ctx = createRun({ config, mode: 'morning', lookbackWindow: '12h', dryRun: true, trigger: 'cli', kind: 'digest' });
+    const { p, seen } = scripted([]);
+    const first = '## 🎮 Gaming\n*   [**Story 1**](https://x.dev/1) — one. [cite: N001]\n- [**Story 2**](https://x.dev/2) — two and three. [cite: N002, N003]\n## 🗒️ EXCLUDED\n- Story 4 (Src3) — reason: filler [N004]';
+    const out = await ensureCoverage(ctx, items, withIdRule(buildLlmPayload({ mode: 'morning', items, morningDigest: '' }, config, [])),
+      { tier: 'gemini', model: 'g', text: first, finishReason: 'STOP', truncated: false, attempts: [] }, opts(p));
+    expect(seen).toHaveLength(0);
+    expect(Object.fromEntries(out.placements)).toEqual({ N001: 'section', N002: 'section', N003: 'section', N004: 'excluded' });
+    expect(stripTags(out.digest)).not.toMatch(/cite|N00/);
   });
 
   it('still guarantees full coverage when the recovery call itself fails', async () => {

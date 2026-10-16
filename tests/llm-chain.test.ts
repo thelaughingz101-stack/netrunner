@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { setEnvForTests } from '../src/env.js';
 import { normalizeConfig } from '../src/config/schema.js';
 import { log } from '../src/logger.js';
-import { AllTiersFailedError, generate, llmTimeoutFor, tierOrder } from '../src/pipeline/llm/engine.js';
+import { AllTiersFailedError, dropRunaways, generate, llmTimeoutFor, retryDelay, tierOrder } from '../src/pipeline/llm/engine.js';
+import { attemptStage } from '../src/pipeline/llm/explain.js';
 import { LLMError, type LLMRequest, type Provider, type ProviderOutput, type Tier } from '../src/pipeline/llm/types.js';
 import { geminiProvider } from '../src/pipeline/llm/gemini.js';
 import { claudeProvider } from '../src/pipeline/llm/claude.js';
@@ -36,6 +37,26 @@ function scripted(tier: Tier, steps: (ProviderOutput | LLMError)[], unavailable:
 
 const noSleep = { sleep: async () => {}, tries: 3, retryDelayMs: 0, timeoutMs: 1000 };
 const cfg = (primary: Tier, fallbackChain: Tier[]) => normalizeConfig({ llm: { primary, fallbackChain } });
+
+// The real loop from 2026-10-16's Comics call: a made-up Facebook link that turned into ~35,000 "2"s, which
+// Gemini returned in 8,192-character parts (joined with newlines), so it filled pages of the digest.
+const KEPT = ['## 📚 Comics', '**DC Comics**', '*   [**Lobo #8**](https://comicquest.com/new-comics-releases-oct-21-26/) — The Main Man returns in Lobo #8.'];
+const LOOP = [...KEPT, `*   [**New Titans #40**](https://www.facebook.com/ComicList/posts/pfbid0${'2'.repeat(4108)}`, '2'.repeat(8192), '2'.repeat(6934),
+  '*   [**Nightwing #143**](https://x.dev/n) — Issue #143.'].join('\n');
+const LOOP_CLEANED = [...KEPT, '*   [**Nightwing #143**](https://x.dev/n) — Issue #143.'].join('\n');
+
+describe('an AI stuck repeating itself', () => {
+  it('drops the lines it filled with a repeated run (even across several lines)', () => {
+    expect(dropRunaways(LOOP)).toEqual({ text: LOOP_CLEANED, dropped: 3 });
+    expect(dropRunaways(`- ${'ha'.repeat(150)}`).dropped).toBe(1);
+  });
+
+  it('leaves ordinary text alone, long lines and short repeats included', () => {
+    const fine = ['---', '==========', '| --- | --- | --- |', 'Wow!!!!!!!!!!', '- [**Absolute Batman #25**](https://x.dev/ab25) — 750,000 orders… *(Bleeding Cool)*',
+      Array.from({ length: 300 }, (_, i) => `word${i}`).join(' ')].join('\n');
+    expect(dropRunaways(fine)).toEqual({ text: fine, dropped: 0 });
+  });
+});
 
 describe('LLM fallback chain', () => {
   beforeEach(() => setEnvForTests({}));
@@ -92,6 +113,17 @@ describe('LLM fallback chain', () => {
     expect(r.attempts.filter(a => !a.ok)).toHaveLength(6);
   });
 
+  it('waits longer each time an AI says it is overloaded or rate-limited (5 s, 15 s, 45 s, max 2 min)', async () => {
+    expect([1, 2, 3, 4, 5].map(n => retryDelay(5000, n, 503))).toEqual([5000, 15000, 45000, 120000, 120000]);
+    expect(retryDelay(5000, 3, 429)).toBe(45000);
+    expect(retryDelay(5000, 2, undefined, 'claude 529 error: Overloaded')).toBe(15000);
+    expect(retryDelay(5000, 3, 500)).toBe(5000);
+    const waits: number[] = [];
+    const g = scripted('gemini', [new LLMError('503 high demand', true, 503), new LLMError('503 high demand', true, 503), ok('done')]);
+    await generate(req, cfg('gemini', []), log, { tries: 3, retryDelayMs: 5000, timeoutMs: 1000, sleep: async ms => { waits.push(ms); }, providers: { gemini: g.p } });
+    expect(waits).toEqual([5000, 15000]);
+  });
+
   it('reports every attempt as it starts, naming the tier it fell back from (the Run button hover)', async () => {
     const g = scripted('gemini', [new LLMError('500', true, 500), new LLMError('400 bad request', false, 400)]);
     const c = scripted('claude', [ok('fine')]);
@@ -142,6 +174,27 @@ describe('LLM fallback chain', () => {
     const o = scripted('ollama', [new LLMError('ECONNREFUSED', false)]);
     await expect(generate(req, cfg('gemini', ['claude', 'ollama']), log, { ...noSleep, providers: { gemini: g.p, claude: c.p, ollama: o.p } }))
       .rejects.toSatisfy((e: unknown) => e instanceof AllTiersFailedError && e.attempts.length === 3);
+  });
+
+  it('asks again when the AI gets stuck repeating itself, and the Run button says why', async () => {
+    const g = scripted('gemini', [ok(LOOP), ok('clean')]);
+    const stages: string[] = [];
+    const r = await generate(req, cfg('gemini', []), log, { ...noSleep, providers: { gemini: g.p }, onAttempt: a => stages.push(attemptStage(a)) });
+    expect(r).toMatchObject({ tier: 'gemini', text: 'clean', truncated: false });
+    expect(r.attempts[0]).toMatchObject({ ok: false, error: expect.stringMatching(/repeating itself/) });
+    expect(stages[1]).toBe('Gemini got stuck repeating itself, so trying again (attempt 2 of 3)');
+  });
+
+  it('asks again only once, then the next AI; with nothing better it ships the answer minus the broken lines', async () => {
+    const g = scripted('gemini', [ok(LOOP), ok(LOOP), ok('never asked')]);
+    const c = scripted('claude', [ok('from claude')]);
+    expect(await generate(req, cfg('gemini', ['claude']), log, { ...noSleep, providers: { gemini: g.p, claude: c.p } })).toMatchObject({ tier: 'claude', text: 'from claude' });
+    expect(g.calls).toHaveLength(2);
+
+    const g2 = scripted('gemini', [ok(LOOP), ok(LOOP)]);
+    const c2 = scripted('claude', [new LLMError('no', false)]);
+    const r = await generate(req, cfg('gemini', ['claude']), log, { ...noSleep, providers: { gemini: g2.p, claude: c2.p } });
+    expect(r).toMatchObject({ tier: 'gemini', text: LOOP_CLEANED, truncated: false });
   });
 
   it('treats a thrown timeout as retryable', async () => {

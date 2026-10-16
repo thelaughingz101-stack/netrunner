@@ -169,10 +169,12 @@ A container has no TPM to lock keys with, so on Docker you can keep them out of 
 trigger (schedule | Run button | CLI)
   → config → mode + lookback
   → fetch feeds (parallel, retried; Reddit in one combined request) → drop Shorts / promo
-  → tag sources → time window → dedupe → same-story clustering → topic toggles
+  → tag sources → time window + per-source cap → dedupe → same-story clustering → topic toggles → per-topic cap
   → [Autopilot] assign IDs N001… → prompt (+ ID rule) → Gemini → Claude → Ollama
+        (over LLM_ITEMS_PER_CALL stories: one call per topic, 3 at a time, stitched in section order)
+        → an answer stuck repeating itself: broken lines dropped, asked once more, then the next AI
         → diff output IDs vs. the item list → re-run ONLY the missing items (≤2 rounds)
-        → anything still missing is listed under 📋 Everything Else → strip tags
+        → anything still missing is listed under 📋 Everything Else → strip tags → drop repeated bullets
   → [Copy-Paste] platform exporter → copy-paste prompt
   → save digest → story tracker → Discord / Email / File (minus hidden sections)
 ```

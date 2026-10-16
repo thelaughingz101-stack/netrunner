@@ -64,7 +64,7 @@ describe('Manual-mode exporters', () => {
   });
 
   it('chatgpt export is the deployed node verbatim apart from the summary-length and duplicates patches', () => {
-    const gen = fs.readFileSync(path.resolve(__dirname, '../src/pipeline/prompt/generated/exportChatgpt.ts'), 'utf8');
+    const gen = fs.readFileSync(path.resolve(__dirname, '../src/pipeline/prompt/generated/exportChatgpt.ts'), 'utf8').replace(/\r\n/g, '\n');
     const original = deployed('digest_export__ChatGPT_.js').replace(
       'in its single best-fit section (or 📋 Everything Else). Every other appearance',
       'in its single best-fit section (or 📋 Everything Else), naming every outlet that covered it, e.g. *(Eurogamer, Kotaku)*. Every other appearance',

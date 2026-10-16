@@ -1,6 +1,6 @@
 {
   "name": "netrunner",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "NetRunner news digest — standalone, self-hosted (migrated from n8n)",
   "private": true,
   "type": "module",

@@ -1,7 +1,7 @@
 // Port of n8n "Feed List Code": built-in FEEDS + custom sources from config, filtered by
-// the per-source toggles. One deliberate change: xCancel feeds are skipped (globally blocked —
-// they only ever returned 1971-dated placeholders). See CHANGES_FROM_N8N.md.
-import { BUILTIN_FEEDS, feedKind, toggleKey, type FeedDef } from '../../catalog/index.js';
+// the per-source toggles. X accounts are gone (they only ever returned placeholders through xCancel);
+// Bluesky accounts took their place (catalog, and Add your own). See CHANGES_FROM_N8N.md.
+import { BUILTIN_FEEDS, toggleKey, type FeedDef } from '../../catalog/index.js';
 import type { Config } from '../../config/schema.js';
 
 export interface FeedToFetch extends FeedDef {
@@ -20,20 +20,18 @@ export function customFeeds(config: Config): FeedToFetch[] {
     out.push({ name: label, category: 'Custom Feeds', type: 'rss', custom: true,
       url: `https://www.youtube.com/feeds/videos.xml?channel_id=${id}` });
   });
-  (cs.xcancel || []).forEach(handle =>
-    out.push({ name: `@${handle}`, category: 'Custom Feeds', type: 'rss', custom: true,
-      url: `https://xcancel.com/${handle}/rss` }));
+  (cs.bluesky || []).forEach(a =>
+    out.push({ name: `@${a.handle}`, category: 'Custom Feeds', type: 'rss', custom: true,
+      url: `https://bsky.app/profile/${a.did}/rss` }));
   return out;
 }
 
-export function buildFeedList(config: Config, opts: { includeXCancel?: boolean } = {}): { feeds: FeedToFetch[]; skippedXCancel: number } {
+export function buildFeedList(config: Config): { feeds: FeedToFetch[] } {
   // Source toggles — null/empty means no config yet, treat as all enabled (n8n behavior)
   const enabledSources = config.sources && Object.keys(config.sources).length > 0 ? config.sources : null;
   const all = [...BUILTIN_FEEDS, ...customFeeds(config)].filter(f => f.url);
   const toggled = enabledSources ? all.filter(f => enabledSources[toggleKey(f)] !== false) : all;
-  if (opts.includeXCancel) return { feeds: toggled, skippedXCancel: 0 };
-  const noX = toggled.filter(f => feedKind(f.url) !== 'xCancel');
-  return { feeds: combineReddit(noX), skippedXCancel: toggled.length - noX.length };
+  return { feeds: combineReddit(toggled) };
 }
 
 const SUBREDDIT_RSS = /^https?:\/\/(?:www\.|old\.)?reddit\.com\/r\/([A-Za-z0-9_]+)\/?\.rss$/i;

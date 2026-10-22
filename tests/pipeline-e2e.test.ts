@@ -71,7 +71,9 @@ describe('full pipeline (fake feeds + scripted LLM)', () => {
     const out: any = await run({ trigger: 'cli', forceMode: 'morning', fetchText, feedTries: 1, engine: { providers: { gemini: llm.p }, tries: 1 }, targets: [target.t] });
 
     expect(out.kind).toBe('digest');
-    expect(llm.calls.map(c => c.kind)).toEqual(['digest', 'recovery']);
+    // Written (and its dropped item recovered), delivered, then graded: one request for all four AI criteria.
+    expect(llm.calls.map(c => c.kind)).toEqual(['digest', 'recovery', 'grade']);
+    expect(out.stats.grade).toMatchObject({ verdict: expect.any(String), score: expect.any(Number) });
     expect(llm.calls[0].prompt.system).toContain('ITEM IDS (machine-checked');
     expect(llm.calls[1].prompt.user.match(/"id":"N\d+"/g)).toHaveLength(1); // only the dropped one
     expect(out.digest).toContain('Recovered');
@@ -195,7 +197,9 @@ describe('big runs: one AI call per topic', () => {
         if (failOn?.test(req.prompt.system)) throw new LLMError('gemini HTTP 503: high demand', false, 503);
         const ids = [...req.prompt.user.matchAll(/"id":"(N\d+)"/g)].map(m => m[1]);
         const headers = req.prompt.system.slice(req.prompt.system.indexOf('REQUIRED HEADER ORDER')).split('\n').filter(l => l.startsWith('## '));
-        const topic = headers.find(h => !/Everything Else|EXCLUDED|Story Updates/.test(h)) ?? '## 📋 Everything Else';
+        // Its stories' own topic (a call now carries several topics, search-only ones included), else the first.
+        const cat = req.prompt.user.match(/"category":"([^"]+)"/)?.[1];
+        const topic = headers.find(h => cat && h.endsWith(` ${cat}`)) ?? headers.find(h => !/Everything Else|EXCLUDED|Story Updates/.test(h)) ?? '## 📋 Everything Else';
         // Nightly: an update for its topic when the call saw the morning digest, else the AI's usual "nothing to update".
         const updates = !opts.updates ? '' : /MORNING/.test(req.prompt.user)
           ? `## 🔄 Story Updates\n- [**Update on ${topic.replace(/^##\s*\S+\s*/, '')}**](u) — changed. *(S)*\n`
@@ -214,15 +218,15 @@ describe('big runs: one AI call per topic', () => {
   it('writes each topic in its own call and stitches them in section order', async () => {
     const llm = topicLlm();
     const out: any = await run({ trigger: 'cli', forceMode: 'morning', fetchText: twoTopics, feedTries: 1, engine: { providers: { gemini: llm.p }, tries: 1 }, targets: [] });
-    expect(llm.calls.filter(c => c.kind === 'digest')).toHaveLength(3); // Gaming, Tech & Hardware, searches for the other topics
+    expect(llm.calls.filter(c => c.kind === 'digest')).toHaveLength(2); // Gaming (3 stories, over the limit of 2 alone); Tech & Hardware with the search-only topics
     const headers = out.digest.split('\n').filter((l: string) => l.startsWith('## '));
     expect(headers.indexOf('## 🎮 Gaming')).toBeLessThan(headers.indexOf('## 🖥️ Tech & Hardware'));
     expect(headers.filter((h: string) => /Everything Else/.test(h))).toHaveLength(1);
     expect(headers.at(-1)).toBe('## 🗒️ EXCLUDED');
     expect(out.digest).not.toMatch(/\[#N\d+\]/);
-    expect(out.stats.llm).toMatchObject({ calls: 3 });
-    expect(out.stats.coverage).toMatchObject({ calls: 3, expected: 5, forced: 0, finalAccounted: 5 });
-    expect(llm.stages).toContain('Writing by topic: 0 of 3 done · Gaming: Writing the digest with Gemini');
+    expect(out.stats.llm).toMatchObject({ calls: 2 });
+    expect(out.stats.coverage).toMatchObject({ calls: 2, expected: 5, forced: 0, finalAccounted: 5 });
+    expect(llm.stages).toContain('Writing in 2 parts: 0 done · Gaming: Writing the digest with Gemini');
   });
 
   it("a topic whose call fails still leaves the rest of the digest, with a note and plain headlines", async () => {
@@ -232,7 +236,7 @@ describe('big runs: one AI call per topic', () => {
     expect(out.digest).toContain('• Gemini was overloaded with requests.');
     expect(out.digest).toContain('- [**Framework unveils modular laptop motherboard**](https://www.theverge.com/framework) *(The Verge)*');
     expect(out.digest).toContain('## 🎮 Gaming');
-    expect(out.stats.llm).toMatchObject({ calls: 3, failedTopics: ['Tech & Hardware'] });
+    expect(out.stats.llm).toMatchObject({ calls: 2, failedTopics: ['Tech & Hardware'] });
   });
 
   it('nightly: each topic call sees only its part of the morning digest; Story Updates comes only from calls that had one', async () => {
@@ -250,7 +254,7 @@ describe('big runs: one AI call per topic', () => {
     const at = out.digest.indexOf('## 🔄 Story Updates');
     const updates = out.digest.slice(at, out.digest.indexOf('\n## ', at + 5));
     expect(updates).toContain('Update on Gaming');
-    expect(updates).toContain('Update on Tech & Hardware');
+    expect(updates.match(/Update on /g)).toHaveLength(2); // one from each call that saw its part of the morning
     expect(updates).not.toContain('No prior morning digest');
     expect(out.digest.match(/## 🔄 Story Updates/g)).toHaveLength(1);
   });

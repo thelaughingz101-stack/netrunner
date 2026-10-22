@@ -137,12 +137,13 @@ describe('config layer', () => {
     });
   });
 
-  it('serves a catalog with every topic: the 158 deployed feeds, minus removed dead ones, plus additions', async () => {
+  it('serves a catalog with every topic: the 158 deployed feeds, minus the 45 X accounts and removed dead ones, plus additions', async () => {
     const cat = uiCatalog();
     expect(cat.topics).toEqual(TOPICS);
     const removed = Object.values(FEED_OVERRIDES).filter(o => o === null).length;
-    expect(cat.feedCount).toBe(158 - removed + EXTRA_FEEDS.length);
+    expect(cat.feedCount).toBe(158 - 45 - removed + EXTRA_FEEDS.length);
     expect(cat.sources['World News']?.RSS).toContain('BBC World News');
-    expect(cat.sources['Gaming']?.xCancel).toContain('Wario64');
+    expect(cat.sources['Gaming']?.Bluesky).toContain('Wario64');
+    expect(Object.values(cat.sources).flatMap(k => Object.keys(k))).not.toContain('xCancel');
   });
 });

@@ -34,10 +34,15 @@ const EnvSchema = z.object({
   LLM_TIMEOUT_MAX_MS: int(1_800_000),
   LLM_MAX_TRIES: int(5),
   LLM_RETRY_DELAY_MS: int(5_000),
-  // More stories than this in one run → one AI call per topic (one call can't write ~560 stories).
+  // More stories than this in one run → a few AI calls of whole topics, each at most this many (one call can't write ~560).
   LLM_ITEMS_PER_CALL: int(150),
   FEED_TIMEOUT_MS: int(20_000),
   FEED_CONCURRENCY: int(8),
+  // Swap Google News links in the digest for the publishers' own (ingest/googleNews.ts).
+  GNEWS_RESOLVE: bool(true),
+  // Every AI call of a digest run must finish this long after the run starts; calls that can't are listed as
+  // failed topics instead. Below Task Scheduler's 2-hour limit and the run lock's, so a run always ends cleanly.
+  RUN_DEADLINE_MS: int(100 * 60_000),
 
   DISCORD_WEBHOOK_URL: optional,
 

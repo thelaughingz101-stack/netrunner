@@ -1,6 +1,6 @@
 import { FEEDS } from './feeds.generated.js';
-import { EXTRA_FEEDS, FEED_OVERRIDES, SOURCE_LABELS } from './feeds.extra.js';
-import { SOURCE_MAP as GEN_SOURCE_MAP, YOUTUBE_AUTHORS as GEN_YT, XCANCEL_USERS as GEN_XCANCEL } from './sourceMap.generated.js';
+import { EXTRA_FEEDS, FEED_OVERRIDES, OFFICIAL_SOURCES, SOURCE_LABELS } from './feeds.extra.js';
+import { SOURCE_MAP as GEN_SOURCE_MAP, YOUTUBE_AUTHORS as GEN_YT } from './sourceMap.generated.js';
 import { EXTRA_SOURCE_MAP, EXTRA_YOUTUBE_AUTHORS } from './sourceMap.extra.js';
 import type { FeedDef, FeedKind, SourceTag } from './types.js';
 
@@ -16,7 +16,14 @@ const merged = <T extends { category: string }>(x: T): T =>
   x.category in MERGED_TOPICS ? { ...x, category: MERGED_TOPICS[x.category] } : x;
 const mergedMap = (m: Record<string, SourceTag>) => Object.fromEntries(Object.entries(m).map(([k, t]) => [k, merged(t)]));
 
-const patched = FEEDS.flatMap(f => {
+/**
+ * X is gone (Zion, 2026-10-22: "any X should be replaced with Bluesky"). The n8n catalog's 45 X accounts were
+ * read through xCancel, which never returned anything real; they're dropped here, and the accounts live on
+ * as Bluesky accounts or their own sites' feeds where those exist (feeds.extra.ts).
+ */
+const isX = (f: FeedDef) => /xcancel\.com\//i.test(f.url);
+
+const patched = FEEDS.filter(f => !isX(f)).flatMap(f => {
   if (!(f.name in FEED_OVERRIDES)) return [merged(f)];
   const o = FEED_OVERRIDES[f.name];
   return o === null ? [] : [merged({ ...f, ...o })];
@@ -24,14 +31,16 @@ const patched = FEEDS.flatMap(f => {
 export const BUILTIN_FEEDS: FeedDef[] = [...patched, ...EXTRA_FEEDS];
 export const SOURCE_MAP: Record<string, SourceTag> = { ...mergedMap(GEN_SOURCE_MAP), ...EXTRA_SOURCE_MAP };
 export const YOUTUBE_AUTHORS: Record<string, SourceTag> = { ...mergedMap(GEN_YT), ...EXTRA_YOUTUBE_AUTHORS };
-export const XCANCEL_USERS: Record<string, SourceTag> = mergedMap(GEN_XCANCEL);
 
 /** The key `config.sources` toggles on — same rule as n8n's Feed List: sourceKey || name. */
 export const toggleKey = (f: Pick<FeedDef, 'name' | 'sourceKey'>) => f.sourceKey || f.name;
 
+/** Government agencies, public bodies and nonprofit institutions: their own word on a story. */
+export const isOfficial = (sourceName: string) => OFFICIAL_SOURCES.has(sourceName);
+
 export function feedKind(url: string): FeedKind {
   if (/youtube\.com\/feeds\//i.test(url)) return 'YouTube';
-  if (/xcancel\.com\//i.test(url)) return 'xCancel';
+  if (/bsky\.app\/profile\//i.test(url)) return 'Bluesky';
   return 'RSS';
 }
 
@@ -42,9 +51,9 @@ export function feedKind(url: string): FeedKind {
  * missing from the n8n-era UI, so they couldn't be switched off (see CHANGES_FROM_N8N.md).
  */
 export const TOPICS: string[] = [
-  'Gaming', 'TV & Movies', 'Anime', 'Animation',
+  'Gaming', 'TV & Movies', 'Anime', 'Animation', 'Music',
   'Tech & Hardware', 'AI & LLMs', 'US Politics', 'World News', 'Business & Finance',
-  'Science & Space', 'Health', 'Security', 'Comics', 'Notable Trends', 'Blindspot Analysis',
+  'Science & Space', 'Health', 'Weather & Disasters', 'Security', 'Comics', 'Notable Trends', 'Blindspot Analysis',
   'Leaks & Rumors', 'Custom Feeds',
 ];
 
@@ -54,6 +63,8 @@ export interface UiCatalog {
   sources: Record<string, Partial<Record<FeedKind, string[]>>>;
   /** toggle key → full name, for sources known by an abbreviation (Sources tab only) */
   labels: Record<string, string>;
+  /** toggle keys of official bodies (government, intergovernmental, nonprofit institutions) */
+  official: string[];
   feedCount: number;
 }
 
@@ -69,7 +80,7 @@ export function uiCatalog(): UiCatalog {
     }
     if (Object.keys(byKind).length) sources[topic] = byKind;
   }
-  return { topics: TOPICS, sources, labels: SOURCE_LABELS, feedCount: BUILTIN_FEEDS.length };
+  return { topics: TOPICS, sources, labels: SOURCE_LABELS, official: [...OFFICIAL_SOURCES], feedCount: BUILTIN_FEEDS.length };
 }
 
 /** Every distinct toggle key across the catalog. */

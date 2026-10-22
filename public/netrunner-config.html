@@ -47,6 +47,8 @@ const TOPICS  = window.NR_CATALOG.topics;
 const SOURCES = window.NR_CATALOG.sources;
 // Full names for sources known by an abbreviation ("CDC" → "Centers for Disease Control and Prevention (CDC)").
 const LABELS  = window.NR_CATALOG.labels || {};
+// Official bodies: government agencies, public bodies and nonprofit institutions.
+const OFFICIAL = new Set(window.NR_CATALOG.official || []);
 
 const TIMEZONES = [
   "America/New_York","America/Chicago","America/Denver","America/Los_Angeles",
@@ -65,25 +67,20 @@ const buildDefaultSources = () => {
   return out;
 };
 
-// Catalog sources that are actually fetched — excludes xCancel, which is "Coming Soon"
-// pending per-user X API key support (see Custom Sources tab). Shared by SourcesTab
-// (per-category counts) and the dashboard's total SOURCES stat so both agree.
-const COUNTABLE_SOURCE_SET = new Set(
-  Object.values(SOURCES).flatMap(types =>
-    Object.entries(types).filter(([type]) => type !== "xCancel").flatMap(([, list]) => list)
-  )
-);
+// Every catalog source (X is gone, replaced by Bluesky). Shared by SourcesTab (per-category counts), the
+// starting points and the dashboard's total SOURCES stat so they agree.
+const COUNTABLE_SOURCE_SET = new Set(Object.values(SOURCES).flatMap(types => Object.values(types).flat()));
 
 const BLANK_CONFIG = {
   topics:  Object.fromEntries(TOPICS.map(t => [t, false])),
   sources: Object.fromEntries(Object.keys(buildDefaultSources()).map(k => [k, false])),
   delivery: { discord:false, email:false, emailAddress:"", textFile:false, openInApp:false, chatbotExport:false, chatbotPlatform:"chatgpt", outputPath:"", fileFormat:"md" },
   schedule: { enabled:true, morningTime:"07:00", nightlyTime:"20:00", timezone:"America/New_York", frequency:"twice_daily", skipWeekends:false, lookbackWindow:"12h" },
-  llm:  { mode:"llm", primary:"gemini", fallbackChain:["claude","ollama"] },
-  format: { summaryLength:"2-3", language:"English", sectionOrder:[...TOPICS], showExcluded:true, showEverythingElse:true },
+  llm:  { mode:"llm", primary:"gemini", fallbackChain:["claude","ollama"], grade:true },
+  format: { summaryLength:"2-3", language:"English", sectionOrder:[...TOPICS], showExcluded:true, showEverythingElse:true, digestSize:"full" },
   filters: { shorts:true, promotional:true },
   rollups: { weekly:false, monthly:false },
-  customSources: { rss:[], youtube:[], xcancel:[] }
+  customSources: { rss:[], youtube:[], bluesky:[] }
 };
 
 const DEFAULT_CONFIG = {
@@ -337,15 +334,20 @@ function N8nBadge({ status }) {
 // ── TABS META ─────────────────────────────────────────────────────────────────
 
 // ── MARKDOWN → HTML (Obsidian-style reading view) ────────────────────────────
+// Digest text comes from feeds via the AI, so it's untrusted: quotes are escaped too (a link can't break out
+// of its href), and only http(s) links become links (no javascript: or data:); anything else stays plain text.
+const mdLink = (text, url) => /^https?:\/\//i.test(url)
+  ? `<a class="md-link" href="${url}" target="_blank" rel="noopener noreferrer">${text}</a>` : text;
+
 function renderMD(md) {
   if (!md) return "";
   let html = md
-    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;")
     .replace(/^### (.+)$/gm, '<h3 class="md-h3">$1</h3>')
     .replace(/^## (.+)$/gm, '<h2 class="md-h2">$1</h2>')
     .replace(/^# (.+)$/gm, '<h1 class="md-h1">$1</h1>')
-    .replace(/\[\*\*(.+?)\*\*\]\((.+?)\)/g, '<a class="md-link" href="$2" target="_blank" rel="noopener"><strong>$1</strong></a>')
-    .replace(/\[(.+?)\]\((.+?)\)/g, '<a class="md-link" href="$2" target="_blank" rel="noopener">$1</a>')
+    .replace(/\[\*\*(.+?)\*\*\]\((.+?)\)/g, (m, text, url) => mdLink(`<strong>${text}</strong>`, url))
+    .replace(/\[(.+?)\]\((.+?)\)/g, (m, text, url) => mdLink(text, url))
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/\*\((.+?)\)\*/g, '<em class="md-source">($1)</em>')
     .replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, '<em>$1</em>')
@@ -381,6 +383,7 @@ details:not([open])>.md-sum{margin-bottom:0;}
 details:not([open])>.md-sum::before{transform:rotate(-90deg);}
 .md-sum:hover{color:#ff6d3a;}
 .md-count{font-family:'IBM Plex Mono',monospace;font-size:.58em;font-weight:400;color:#857579;border:1px solid #2c1d20;border-radius:3px;padding:1px 6px;}
+.md-mark{background:#ff6d3a40;color:#f3eeec;border-radius:2px;padding:0 1px;}
 `;
 
 // Custom feeds live at the bottom of Sources ("Add your own"); Recaps live on the Schedule tab.
@@ -397,37 +400,57 @@ const TABS = [
 
 // ── SECTIONS ──────────────────────────────────────────────────────────────────
 
-// A starting point matches your settings when every topic and every fetched source is on (Everything on)
-// or off (Start fresh). They're starting points, not modes: once you change anything, neither matches.
+// Starting points set the topics and the sources; schedule, delivery, AI and Format settings stay.
+// They're starting points, not modes: once you change anything, the card no longer shows Current.
+// Topics with at least one official source (Official only keeps just those).
+const OFFICIAL_TOPICS = TOPICS.filter(t => Object.values(SOURCES[t] || {}).some(list => list.some(k => OFFICIAL.has(k))));
+const STARTING_POINTS = {
+  default:  { topic: () => true,                       source: () => true },
+  official: { topic: t => OFFICIAL_TOPICS.includes(t), source: k => OFFICIAL.has(k) },
+  blank:    { topic: () => false,                      source: () => false },
+};
+// Custom Feeds follows only Everything on / Start fresh; Official only leaves it as it is.
+const keepsCustomFeeds = id => id !== "default" && id !== "blank";
+
+function applyStartingPoint(config, id) {
+  const p = STARTING_POINTS[id];
+  const next = deepClone(config);
+  next.sources = next.sources || {};
+  for (const t of TOPICS) if (!(t === "Custom Feeds" && keepsCustomFeeds(id))) next.topics[t] = p.topic(t);
+  for (const k of COUNTABLE_SOURCE_SET) next.sources[k] = p.source(k);
+  return next;
+}
+
 const matchesTemplate = (config, id) => {
-  const want = id === "default";
-  return TOPICS.every(t => !!config.topics[t] === want) && [...COUNTABLE_SOURCE_SET].every(k => !!config.sources[k] === want);
+  const p = STARTING_POINTS[id];
+  return TOPICS.every(t => (t === "Custom Feeds" && keepsCustomFeeds(id)) || !!config.topics[t] === p.topic(t))
+    && [...COUNTABLE_SOURCE_SET].every(k => !!config.sources[k] === p.source(k));
 };
 
 function TemplatesTab({ config, onApply, onExport, onImport }) {
   return (
     <div>
       <h1 style={s.h1}>Get started</h1>
-      <p style={{ ...s.sub, marginBottom:26 }}>Pick a starting point, then fine-tune it in the other tabs. Picking one fills in those tabs; nothing is saved until you press Save.</p>
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:18 }}>
+      <p style={{ ...s.sub, marginBottom:26 }}>Pick a starting point, then fine-tune it in the other tabs. A starting point sets your topics and sources; your schedule, delivery, AI and Format settings stay as they are. Nothing is saved until you press Save.</p>
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(260px, 1fr))", gap:18 }}>
         {[
-          { id:"default", title:"Everything on", desc:"Every category and every source enabled: the complete digest as shipped.", tag:"RECOMMENDED", color:C.orange },
-          { id:"blank",   title:"Start fresh", desc:"Every option off. Switch on only the topics and sources you care about.", tag:"BLANK", color:C.muted },
+          { id:"default",  title:"Everything on", desc:"Every topic and every source: the complete digest." },
+          { id:"official", title:"Official only", desc:"Only government agencies, public bodies and nonprofits (FDA, Federal Reserve, NASA, UN…), straight from the source. Topics with none of them are switched off." },
+          { id:"blank",    title:"Start fresh",   desc:"Every topic and source off. Switch on only the ones you care about." },
         ].map(t => {
           const current = matchesTemplate(config, t.id);
-          const primary = t.id === "default";
+          // Title first (no tag boxes above it); the button sits at the bottom so all three line up.
           return (
-            <div key={t.id} style={{ ...s.card, cursor:"pointer", marginBottom:0, transition:"border-color .15s", clipPath:NOTCH, borderColor: current ? `${C.cyan}66` : C.border }}
+            <div key={t.id} style={{ ...s.card, cursor:"pointer", marginBottom:0, transition:"border-color .15s", clipPath:NOTCH, borderColor: current ? `${C.cyan}66` : C.border, display:"flex", flexDirection:"column" }}
                  onClick={() => onApply(t.id)}
                  onMouseEnter={e => e.currentTarget.style.borderColor = C.orangeLn}
                  onMouseLeave={e => e.currentTarget.style.borderColor = current ? `${C.cyan}66` : C.border}>
-              <div style={{ display:"flex", gap:8, marginBottom:15 }}>
-                <div style={{ fontFamily:F.mono, fontSize:10.5, letterSpacing:"0.14em", color:t.color, border:`1px solid ${t.color}55`, padding:"4px 9px", borderRadius:3 }}>{t.tag}</div>
-                {current && <div title="Your settings on screen match this starting point" style={{ fontFamily:F.mono, fontSize:10.5, letterSpacing:"0.14em", color:C.cyan, border:`1px solid ${C.cyan}55`, background:C.cyanDim, padding:"4px 9px", borderRadius:3 }}>✓ CURRENT</div>}
+              <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:10, marginBottom:7 }}>
+                <div style={{ fontFamily:F.disp, fontSize:24, fontWeight:700, color:C.text, letterSpacing:"0.01em" }}>{t.title}</div>
+                {current && <div title="Your settings on screen match this starting point" style={{ fontFamily:F.mono, fontSize:10.5, letterSpacing:"0.14em", color:C.cyan, border:`1px solid ${C.cyan}55`, background:C.cyanDim, padding:"4px 9px", borderRadius:3, whiteSpace:"nowrap" }}>✓ CURRENT</div>}
               </div>
-              <div style={{ fontFamily:F.disp, fontSize:24, fontWeight:700, color:C.text, marginBottom:7, letterSpacing:"0.01em" }}>{t.title}</div>
               <div style={{ fontSize:14, fontFamily:F.body, color:C.muted, marginBottom:20, lineHeight:1.55 }}>{t.desc}</div>
-              <button style={primary ? { ...s.btn, background:C.orange, color:"#1a0d07", boxShadow:`0 0 18px ${C.orange}33`, clipPath:NOTCH } : outlineBtn}>Use this →</button>
+              <button style={{ ...outlineBtn, marginTop:"auto", alignSelf:"flex-start" }}>Use this →</button>
             </div>
           );
         })}
@@ -477,8 +500,72 @@ function TopicsTab({ config, update }) {
   );
 }
 
+// Feed health (top of Sources): feeds failing or empty two runs in a row, and ones with no new story in two
+// weeks, from the server's record of recent runs. Working feeds aren't listed.
+const HEALTH_LOOK = {
+  failing: { label:"FAILING", color:C.red },
+  empty:   { label:"EMPTY",   color:C.orange },
+  quiet:   { label:"QUIET",   color:C.muted },
+};
+const shortDate = iso => iso ? new Date(iso).toLocaleDateString(undefined, { month:"short", day:"numeric" }) : "";
+
+function FeedHealthCard({ config, update }) {
+  const [health, setHealth] = useState(null);
+  const [error, setError] = useState("");
+  const [all, setAll] = useState(false);
+  useEffect(() => {
+    api("/api/feeds/health").then(setHealth).catch(e => setError(e.message));
+  }, []);
+  const rows = health ? health.problems : [];
+  const visible = all ? rows : rows.slice(0, 6);
+  const counts = ["failing", "empty", "quiet"].map(k => [k, rows.filter(r => r.problem === k).length]).filter(([, n]) => n);
+  return (
+    <div style={s.card}>
+      <SectionTitle hint={health && health.checkedAt ? `from your last run, ${new Date(health.checkedAt).toLocaleString(undefined, { month:"short", day:"numeric", hour:"numeric", minute:"2-digit" })}` : "from your recent runs"}>Feed health</SectionTitle>
+      {error ? <p style={{ fontFamily:F.body, fontSize:13, color:C.red, margin:0 }}>Couldn't load feed health: {error}</p>
+        : !health ? <p style={{ fontFamily:F.body, fontSize:13, color:C.muted, margin:0 }}>Checking…</p>
+        : !health.checkedAt ? <p style={{ fontFamily:F.body, fontSize:13, color:C.muted, margin:0 }}>Shows up after your first run.</p>
+        : !rows.length ? <p style={{ fontFamily:F.body, fontSize:13.5, color:C.body, margin:0 }}><span style={{ color:C.green, fontWeight:700, marginRight:8 }}>✓</span>All {health.feedsChecked} feeds are working.</p>
+        : <>
+          <p style={{ fontFamily:F.body, fontSize:13, color:C.muted, marginTop:-4, marginBottom:12 }}>
+            {health.feedsChecked - rows.length} of {health.feedsChecked} feeds are fine. {counts.map(([k, n]) => `${n} ${k}`).join(", ")}: switch them off here, or leave them if you expect them back.
+          </p>
+          {visible.map(r => {
+            const look = HEALTH_LOOK[r.problem];
+            const on = r.toggleKey ? config.sources[r.toggleKey] !== false : true;
+            return (
+              <div key={r.url} style={{ display:"flex", alignItems:"center", gap:12, padding:"9px 0", borderTop:`1px solid ${C.border}`, opacity: on ? 1 : 0.5 }}>
+                <span style={{ fontFamily:F.mono, fontSize:10, letterSpacing:"0.06em", color:look.color, border:`1px solid ${look.color}66`, borderRadius:3, padding:"2px 7px", minWidth:62, textAlign:"center" }}>{look.label}</span>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontFamily:F.body, fontSize:14, color:C.text }}>{(r.toggleKey && LABELS[r.toggleKey]) || r.feed} <span style={{ color:C.faint, fontSize:12.5 }}>· {r.topic}</span></div>
+                  <div style={{ fontFamily:F.body, fontSize:12.5, color:C.muted }}>{r.detail}{r.problem !== "quiet" && r.since ? ` · since ${shortDate(r.since)}` : ""}</div>
+                </div>
+                {r.toggleKey
+                  ? <button onClick={() => update(`sources.${r.toggleKey}`, !on)} style={bulkBtn}>{on ? "Switch off" : "Switch on"}</button>
+                  : <span style={{ fontFamily:F.body, fontSize:12, color:C.faint }}>{r.topic === "Custom Feeds" ? "remove it under Add your own" : ""}</span>}
+              </div>
+            );
+          })}
+          {rows.length > 6 && <button onClick={() => setAll(v => !v)} style={{ ...bulkBtn, marginTop:10 }}>{all ? "Show fewer" : `Show all ${rows.length}`}</button>}
+        </>}
+    </div>
+  );
+}
+
+// The mark on an official body's chip (Sources tab) and in its legend.
+const OfficialMark = () => (
+  <span title="Official body: a government agency, public body or nonprofit" style={{ color:C.green, fontSize:11, lineHeight:1 }}>✦</span>
+);
+
 function SourcesTab({ config, update }) {
   const [openCat, setOpenCat] = useState(null);
+  const [query, setQuery] = useState("");
+  const [officialOnly, setOfficialOnly] = useState(false);
+  const q = query.trim().toLowerCase();
+  const filtering = !!q || officialOnly;
+  // Which chips to show: matching the search (short or full name), and official ones when that filter is on.
+  const shown = src => (!q || src.toLowerCase().includes(q) || (LABELS[src] || "").toLowerCase().includes(q)) && (!officialOnly || OFFICIAL.has(src));
+  const matchCount = filtering ? [...COUNTABLE_SOURCE_SET].filter(shown).length : 0;
 
   const setAllInCategory = (allSrcs, value) => {
     const next = { ...config.sources };
@@ -490,6 +577,16 @@ function SourcesTab({ config, update }) {
     <div>
       <h1 style={{ ...s.h1, marginBottom:6 }}>Sources</h1>
       <p style={{ ...s.sub, marginBottom:22 }}>Choose individual feeds per category. Only sources under an enabled topic get fetched.</p>
+      <FeedHealthCard config={config} update={update} />
+      <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:16, flexWrap:"wrap" }}>
+        <input style={{ ...s.input, flex:"1 1 260px", width:"auto" }} type="search" value={query} placeholder="Search sources (e.g. FDA, Reuters, Bluesky…)"
+          aria-label="Search sources" onChange={e => setQuery(e.target.value)} onKeyDown={e => { if (e.key === "Escape") setQuery(""); }} />
+        <button onClick={() => setOfficialOnly(v => !v)} aria-pressed={officialOnly}
+          style={{ ...bulkBtn, fontSize:12, padding:"9px 12px", display:"inline-flex", alignItems:"center", gap:7, color: officialOnly ? C.green : C.muted, borderColor: officialOnly ? `${C.green}88` : C.border, background: officialOnly ? `${C.green}14` : "transparent" }}>
+          <OfficialMark /> Official bodies only
+        </button>
+        {filtering && <span style={{ fontFamily:F.mono, fontSize:12, color: matchCount ? C.muted : C.red }}>{matchCount ? `${matchCount} match${matchCount === 1 ? "" : "es"}` : "no matches"}</span>}
+      </div>
       <div style={s.card}>
         <SectionTitle hint="dropped before the AI sees them">Skip filler</SectionTitle>
         <Row label="Skip YouTube Shorts" sub="Drop Shorts from every channel, built-in and your own">
@@ -500,17 +597,13 @@ function SourcesTab({ config, update }) {
         </Row>
       </div>
       {Object.entries(SOURCES).map(([cat, types]) => {
-        const allSrcs = Object.values(types).flat();
-        // xCancel is "Coming Soon" (not actually fetched yet) — exclude it from the countable/toggleable set
-        // while still rendering it below via the untouched Object.entries(types) loop.
-        // NOTE: filter by type key locally, not by name membership in a global set — several
-        // categories (Gaming, TV & Movies, etc.) reuse the same account name across both an
-        // xCancel entry and a real RSS/YouTube entry, and a name-based test would wrongly
-        // let those xCancel entries back into the count via the collision.
-        const countableSrcs = Object.entries(types).filter(([type]) => type !== "xCancel").flatMap(([, list]) => list);
+        const allSrcs = [...new Set(Object.values(types).flat())];
+        const countableSrcs = allSrcs;
+        // While searching or filtering, only topics with a matching source show, already open.
+        if (filtering && !countableSrcs.some(shown)) return null;
         const topicOn = config.topics[cat] !== false;
         const enabledCount = topicOn ? countableSrcs.filter(src => config.sources[src]).length : 0;
-        const open = openCat === cat;
+        const open = filtering || openCat === cat;
         const pct = countableSrcs.length ? enabledCount / countableSrcs.length : 0;
         const allOn = countableSrcs.length > 0 && countableSrcs.every(src => config.sources[src]);
         return (
@@ -542,23 +635,24 @@ function SourcesTab({ config, update }) {
                 {!topicOn && (
                   <p style={{ fontFamily:F.body, fontSize:12.5, color:C.red, marginBottom:14 }}>This topic is disabled on the Topics tab, so none of these sources will be fetched regardless of their state below.</p>
                 )}
-                {Object.entries(types).map(([type, list]) => {
-                  const disabled = type === "xCancel";
+                {Object.entries(types).map(([type, all]) => {
+                  const list = filtering ? all.filter(shown) : all;
+                  if (!list.length) return null;
                   return (
                   <div key={type} style={{ marginBottom:8 }}>
                     <span style={{ fontFamily:F.body, fontSize:12, fontWeight:600, color:C.muted, letterSpacing:"0.06em", textTransform:"uppercase", display:"block", margin:"10px 0 9px" }}>
-                      {type === "xCancel" ? "X" : type}{disabled && <span style={{ marginLeft:8, fontFamily:F.mono, fontSize:10, letterSpacing:"0.04em", color:C.faint, textTransform:"none", border:`1px solid ${C.border}`, borderRadius:3, padding:"2px 7px" }}>COMING SOON</span>}
+                      {type}
                     </span>
-                    <div style={{ display:"flex", flexWrap:"wrap", gap:7, opacity: disabled ? 0.4 : 1 }}>
+                    <div style={{ display:"flex", flexWrap:"wrap", gap:7 }}>
                       {list.map(src => {
                         const on = topicOn && !!config.sources[src];
                         return (
                           <div
                             key={src}
-                            onClick={disabled ? undefined : () => update(`sources.${src}`, !config.sources[src])}
-                            style={{ ...s.tag, cursor: disabled ? "default" : "pointer", background: on ? C.orangeDim : C.pill, borderColor: on ? C.orangeLn : C.border, color: on ? C.orange : C.muted }}
+                            onClick={() => update(`sources.${src}`, !config.sources[src])}
+                            style={{ ...s.tag, cursor:"pointer", background: on ? C.orangeDim : C.pill, borderColor: on ? C.orangeLn : C.border, color: on ? C.orange : C.muted }}
                           >
-                            <span style={{ fontWeight:700, opacity: on ? 1 : .65 }}>{on ? "✓" : "+"}</span> {LABELS[src] || src}
+                            <span style={{ fontWeight:700, opacity: on ? 1 : .65 }}>{on ? "✓" : "+"}</span> {LABELS[src] || src}{OFFICIAL.has(src) && <OfficialMark />}
                           </div>
                         );
                       })}
@@ -1054,6 +1148,12 @@ function LLMTab({config, update, updateLLMPrimary, runForPrompt, promptResult, p
               );
             })}
           </div>
+          <div style={s.card}>
+            <SectionTitle hint="read-only: it never changes a digest">Grader</SectionTitle>
+            <Row label="Grade each digest" sub="After each digest is sent, NetRunner checks it: repeated stories, switched-off topics, missing links and outlets, filtered clips, and (with a second AI, a different one from the writer when you have its key) stories told twice, in the wrong section, unattributed rumors, and filler. The grade and every problem it found show on the Output tab. Costs one AI request per digest.">
+              <Toggle on={config.llm.grade !== false} onChange={v => update("llm.grade", v)} />
+            </Row>
+          </div>
         </React.Fragment>
       )}
 
@@ -1127,7 +1227,7 @@ function PositionInput({ value, max, label, onCommit }) {
 function FormatTab({ config, update }) {
   const order = config.format.sectionOrder;
   const cs = config.customSources || {};
-  const hasCustom = (cs.rss?.length || 0) + (cs.youtube?.length || 0) + (cs.xcancel?.length || 0) > 0;
+  const hasCustom = (cs.rss?.length || 0) + (cs.youtube?.length || 0) + (cs.bluesky?.length || 0) > 0;
 
   useEffect(() => {
     if (hasCustom && !order.includes("Custom Feeds")) {
@@ -1171,6 +1271,17 @@ function FormatTab({ config, update }) {
         ].map(o => (
           <Row key={o.id} label={o.label} sub={o.sub}>
             <Radio on={config.format.summaryLength===o.id} onClick={() => update("format.summaryLength", o.id)} />
+          </Row>
+        ))}
+      </div>
+      <div style={s.card}>
+        <SectionTitle hint="how many stories reach the AI">Digest size</SectionTitle>
+        {[
+          { id:"full",  label:"Full",  sub:"Default: every topic gets its full share of stories" },
+          { id:"light", label:"Light", sub:"About half as many stories per topic and per source: a shorter digest and a quicker run" },
+        ].map(o => (
+          <Row key={o.id} label={o.label} sub={o.sub}>
+            <Radio on={(config.format.digestSize || "full")===o.id} onClick={() => update("format.digestSize", o.id)} />
           </Row>
         ))}
       </div>
@@ -1368,6 +1479,67 @@ function YouTubeResolveField({ items, onAddAll, onAddEntry, onRemove }) {
   );
 }
 
+// Add your own → Bluesky: a handle or profile link, checked with Bluesky before it's added.
+function BlueskyField({ items, onAdd, onRemove }) {
+  const [input, setInput] = useState("");
+  const [state, setState] = useState("idle"); // idle | running | success | error
+  const [error, setError] = useState("");
+  const [last, setLast] = useState(null);
+  const add = async () => {
+    if (!input.trim()) return;
+    setState("running"); setError(""); setLast(null);
+    try {
+      const a = await api("/api/resolve-bluesky", { method: "POST", body: { query: input.trim() } });
+      const entry = { did: a.did, handle: a.handle, title: a.title || null, avatar: a.avatar || null };
+      onAdd(entry);
+      setLast({ ...entry, lastPost: a.lastPost });
+      setState("success"); setInput("");
+    } catch(e) {
+      setState("error"); setError((e.data && e.data.error) || e.message);
+    }
+    setTimeout(() => setState("idle"), 5000);
+  };
+  const daysAgo = iso => { const d = Math.floor((Date.now() - Date.parse(iso)) / 864e5); return d <= 0 ? "today" : d === 1 ? "yesterday" : `${d} days ago`; };
+  const color = state === "success" ? C.green : state === "error" ? C.red : C.orangeLn;
+  return (
+    <div style={{ marginBottom:26 }}>
+      <label style={s.label}>Bluesky accounts</label>
+      <p style={{ fontSize:13, fontFamily:F.body, color:C.muted, marginBottom:9 }}>Paste a handle (name.bsky.social, or a site like theverge.com) or a profile link and press Add.</p>
+      <div style={{ display:"flex", gap:8 }}>
+        <input style={{ ...s.input, flex:1 }} value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === "Enter" && add()}
+          placeholder="name.bsky.social or https://bsky.app/profile/name.bsky.social" />
+        <button onClick={add} disabled={state === "running"}
+          style={{ ...s.btn, background: state === "success" ? C.green : state === "error" ? C.red : "transparent",
+            color: (state === "idle" || state === "running") ? C.orange : "#1a0d07", border:`1px solid ${color}`, opacity: state === "running" ? 0.7 : 1, whiteSpace:"nowrap" }}>
+          {state === "running" ? "Finding…" : state === "success" ? "✓ Added" : state === "error" ? "Not found" : "Add"}
+        </button>
+      </div>
+      {state === "error" && error && <p style={{ fontFamily:F.body, fontSize:12.5, color:C.red, marginTop:8 }}>{error}</p>}
+      {last && (
+        <div style={{ display:"flex", alignItems:"center", gap:11, marginTop:12, padding:"10px 12px", border:`1px solid ${C.green}55`, background:`${C.green}10`, borderRadius:4 }}>
+          {last.avatar ? <img src={last.avatar} alt="" referrerPolicy="no-referrer" style={{ width:34, height:34, borderRadius:"50%", flexShrink:0 }} />
+            : <span style={{ width:34, height:34, borderRadius:"50%", background:C.pill, flexShrink:0 }} />}
+          <div style={{ flex:1, minWidth:0 }}>
+            <div style={{ fontFamily:F.body, fontSize:14.5, color:C.text, fontWeight:600 }}>{last.title || last.handle}</div>
+            <div style={{ fontFamily:F.body, fontSize:12, color:C.muted }}>@{last.handle}{last.lastPost ? ` · last post ${daysAgo(last.lastPost)}` : " · no posts yet"}</div>
+          </div>
+          <span style={{ color:C.green, fontWeight:700, fontSize:18 }}>✓</span>
+        </div>
+      )}
+      <div style={{ marginTop:12, display:"flex", flexWrap:"wrap", gap:7 }}>
+        {items.map((a, i) => (
+          <span key={a.did} style={s.tag} title={`@${a.handle}`}>
+            {a.avatar && <img src={a.avatar} alt="" referrerPolicy="no-referrer" style={{ width:18, height:18, borderRadius:"50%" }} />}
+            {a.title || `@${a.handle}`}
+            <span onClick={() => onRemove(i)} style={{ cursor:"pointer", color:C.red, marginLeft:2, fontWeight:700 }}>✕</span>
+          </span>
+        ))}
+        {!items.length && <span style={{ fontSize:13, fontFamily:F.body, color:C.faint, fontStyle:"italic" }}>None added yet</span>}
+      </div>
+    </div>
+  );
+}
+
 function CustomSourcesTab({ config, update }) {
   const addAll = (key, lines) => {
     const existing = config.customSources[key];
@@ -1415,19 +1587,11 @@ function CustomSourcesTab({ config, update }) {
           onAddEntry={addYoutubeEntry}
           onRemove={i => remove("youtube", i)}
         />
-        <div style={{ marginBottom:26, opacity:0.5 }}>
-          <label style={s.label}>X accounts <span style={{ marginLeft:8, fontFamily:F.mono, fontSize:10, letterSpacing:"0.04em", color:C.faint, textTransform:"none", border:`1px solid ${C.border}`, borderRadius:3, padding:"2px 7px" }}>COMING SOON</span></label>
-          <p style={{ fontSize:13, fontFamily:F.body, color:C.muted, marginBottom:9 }}>Reading X accounts isn't available yet. Accounts already listed here are kept but not fetched.</p>
-          <div style={{ marginTop:12, display:"flex", flexWrap:"wrap", gap:7 }}>
-            {config.customSources.xcancel.map((item, i) => (
-              <span key={i} style={s.tag}>
-                {item}
-                <span onClick={() => remove("xcancel", i)} style={{ cursor:"pointer", color:C.red, marginLeft:2, fontWeight:700 }}>✕</span>
-              </span>
-            ))}
-            {!config.customSources.xcancel.length && <span style={{ fontSize:13, fontFamily:F.body, color:C.faint, fontStyle:"italic" }}>None added yet</span>}
-          </div>
-        </div>
+        <BlueskyField
+          items={config.customSources.bluesky || []}
+          onAdd={entry => update("customSources.bluesky", [...(config.customSources.bluesky || []).filter(a => a.did !== entry.did), entry])}
+          onRemove={i => remove("bluesky", i)}
+        />
       </div>
     </div>
   );
@@ -1438,6 +1602,85 @@ function CustomSourcesTab({ config, update }) {
 // "Covers the last 24 hours" — the Catch-up range the run used. Not shown for recaps or imported files.
 const CATCH_UP_TEXT = { "12h":"last 12 hours", "24h":"last 24 hours", "3d":"last 3 days", "1w":"last week", "2w":"last 2 weeks", "1mo":"last month" };
 const catchUpLabel = (e) => (e.mode === "weekly" || e.mode === "monthly" || !CATCH_UP_TEXT[e.lookback]) ? "" : `covers the ${CATCH_UP_TEXT[e.lookback]}`;
+
+// The grader's report on a digest (Output tab): a badge, and what each check found. Read-only.
+const GRADE_LOOK = {
+  pass:      { label:"PASS",            icon:"✓", color:C.green },
+  attention: { label:"NEEDS ATTENTION", icon:"!", color:C.orange },
+  fail:      { label:"FAIL",            icon:"✕", color:C.red },
+};
+const GRADABLE_MODES = ["morning", "nightly"];
+
+function GradeCheck({ c }) {
+  const [open, setOpen] = useState(false);
+  const color = c.skipped ? C.faint : c.pass ? C.green : c.critical ? C.red : C.orange;
+  return (
+    <div style={{ padding:"8px 0", borderTop:`1px solid ${C.border}` }}>
+      <div onClick={() => c.evidence.length && setOpen(v => !v)} style={{ display:"flex", alignItems:"baseline", gap:10, cursor: c.evidence.length ? "pointer" : "default" }}>
+        <span style={{ color, fontWeight:700, width:14, textAlign:"center" }}>{c.skipped ? "–" : c.pass ? "✓" : "✕"}</span>
+        <span style={{ fontFamily:F.body, fontSize:13.5, color: c.skipped ? C.muted : C.text, flex:1 }}>
+          {c.name}{c.grader === "ai" && <span style={{ fontFamily:F.mono, fontSize:9.5, color:C.cyan, border:`1px solid ${C.cyan}55`, borderRadius:3, padding:"1px 5px", marginLeft:8 }}>AI</span>}
+          <span style={{ display:"block", fontSize:12.5, color:C.muted, marginTop:2 }}>{c.summary}</span>
+        </span>
+        {!c.skipped && <span style={{ fontFamily:F.mono, fontSize:11.5, color }}>{Math.round(c.score * 100)}</span>}
+        {c.evidence.length > 0 && <span style={{ fontFamily:F.mono, fontSize:11, color:C.faint }}>{open ? "▾" : "▸"}</span>}
+      </div>
+      {open && (
+        <div style={{ margin:"6px 0 2px 24px", fontFamily:F.mono, fontSize:11.5, color:C.body, lineHeight:1.55, overflowWrap:"anywhere" }}>
+          {c.evidence.map((line, i) => <div key={i}>{line}</div>)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function GradePanel({ entry, onGraded }) {
+  const [report, setReport] = useState(null);
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const summary = report ? { score: report.score, verdict: report.verdict } : entry.grade;
+  const toggle = async () => {
+    if (open) { setOpen(false); return; }
+    setOpen(true);
+    if (!report) try { setReport(await api(`/api/digests/${entry.id}/grade`)); } catch(e) { setError(e.message); }
+  };
+  const grade = async () => {
+    setBusy(true); setError("");
+    try { setReport(await api(`/api/digests/${entry.id}/grade`, { method:"POST", timeoutMs: 6 * 60000 })); setOpen(true); onGraded && onGraded(); }
+    catch(e) { setError(e.data && e.data.error ? e.data.error : e.message); }
+    setBusy(false);
+  };
+  if (!summary && !GRADABLE_MODES.includes(entry.mode)) return null;
+  const look = summary && (GRADE_LOOK[summary.verdict] || GRADE_LOOK.attention);
+  const order = c => (c.skipped ? 3 : !c.pass ? (c.critical ? 0 : 1) : 2);
+  return (
+    <div style={{ marginBottom:16 }}>
+      <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+        {summary ? (
+          <button onClick={toggle} title="What the grader checked" style={{ ...s.btn, fontSize:12.5, padding:"6px 12px", background:"transparent", color:look.color, border:`1px solid ${look.color}66`, display:"inline-flex", alignItems:"center", gap:8 }}>
+            <span style={{ fontWeight:700 }}>{look.icon}</span>{look.label}<span style={{ fontFamily:F.mono }}>{summary.score}/100</span><span style={{ color:C.faint }}>{open ? "▾" : "▸"}</span>
+          </button>
+        ) : <span style={{ fontFamily:F.body, fontSize:13, color:C.muted }}>Not graded yet.</span>}
+        {(!summary || open) && GRADABLE_MODES.includes(entry.mode) && (
+          <button onClick={grade} disabled={busy} style={{ ...s.btn, fontSize:12.5, padding:"6px 12px", background:"transparent", color:C.orange, border:`1px solid ${C.orangeLn}`, opacity: busy ? 0.6 : 1 }}>
+            {busy ? "Grading… (about a minute)" : summary ? "Grade again" : "Grade this digest"}
+          </button>
+        )}
+        {error && <span style={{ fontFamily:F.body, fontSize:12.5, color:C.red }}>{error}</span>}
+      </div>
+      {open && report && (
+        <div style={{ marginTop:10, padding:"10px 14px 6px", border:`1px solid ${C.border}`, borderRadius:5, background:C.panel2 }}>
+          <div style={{ fontFamily:F.body, fontSize:12.5, color:C.muted, marginBottom:6 }}>
+            {report.bullets} stories checked{report.graderModel ? ` · AI checks by ${report.graderModel.split(":")[1] || report.graderModel}` : ""} · {new Date(report.gradedAt).toLocaleString()}. The grader only reads: it never changes the digest. Click a check to see what it found.
+            {report.notes && report.notes.map((n, i) => <span key={i} style={{ display:"block", color:C.faint }}>{n}</span>)}
+          </div>
+          {[...report.checks].sort((a, b) => order(a) - order(b)).map(c => <GradeCheck key={c.id} c={c} />)}
+        </div>
+      )}
+    </div>
+  );
+}
 
 // Sections the Format/Topics toggles can hide. Saved digests always keep them; this only changes what's shown.
 const HIDEABLE = [
@@ -1481,7 +1724,37 @@ function splitSections(md) {
   };
 }
 
-function OutputTab({ entries, selectedId, onSelect, onRemove, onImport, showDefaults }) {
+// Marks a search term in rendered digest HTML: text between tags only, so links and attributes stay intact.
+function highlightHTML(html, q) {
+  if (!q) return html;
+  const esc = q.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  const re = new RegExp(esc.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+  return html.split(/(<[^>]+>)/).map(part => part.startsWith("<") ? part : part.replace(re, m => `<mark class="md-mark">${m}</mark>`)).join("");
+}
+
+// Output tab search: every saved digest on the server, as you type.
+function useDigestSearch(query) {
+  const [state, setState] = useState({ q: "", hits: [], busy: false, error: "" });
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < 2) { setState({ q: "", hits: [], busy: false, error: "" }); return; }
+    setState(prev => ({ ...prev, busy: true }));
+    let alive = true;
+    const t = setTimeout(async () => {
+      try {
+        const { hits } = await api(`/api/digests/search?q=${encodeURIComponent(q)}`);
+        if (alive) setState({ q, hits, busy: false, error: "" });
+      } catch(e) { if (alive) setState({ q, hits: [], busy: false, error: e.message }); }
+    }, 300);
+    return () => { alive = false; clearTimeout(t); };
+  }, [query]);
+  return state;
+}
+
+function OutputTab({ entries, selectedId, onSelect, onRemove, onImport, showDefaults, onGraded }) {
+  const [query, setQuery] = useState("");
+  const search = useDigestSearch(query);
+  const searching = query.trim().length >= 2;
   const [show, setShow] = useState(showDefaults);
   useEffect(() => setShow(showDefaults), [showDefaults.excluded, showDefaults.everythingElse]);
   const grouped = {};
@@ -1519,10 +1792,32 @@ function OutputTab({ entries, selectedId, onSelect, onRemove, onImport, showDefa
           No saved digests yet. Hit <span style={{ color:C.orange }}>Run News Digest</span>, wait for a scheduled run, or import a .md file (e.g. from your old <span style={{ color:C.orange }}>.n8n-files</span> folder).
         </div>
       ) : (
-        <div style={{ display:"grid", gridTemplateColumns:"230px minmax(0, 1fr)", gap:18, alignItems:"start" }}>
-          {/* entry list */}
+        <>
+        <input style={{ ...s.input, marginBottom:14 }} type="search" value={query} placeholder="Search every saved digest (a game, a company, a person…)"
+          aria-label="Search saved digests" onChange={e => setQuery(e.target.value)} onKeyDown={e => { if (e.key === "Escape") setQuery(""); }} />
+        <div style={{ display:"grid", gridTemplateColumns: searching ? "300px minmax(0, 1fr)" : "230px minmax(0, 1fr)", gap:18, alignItems:"start" }}>
+          {/* entry list, or search results while searching */}
           <div style={{ ...s.card, padding:"10px 0", maxHeight:"70vh", overflowY:"auto" }}>
-            {dates.map(date => (
+            {searching && (
+              <div>
+                <div style={{ fontFamily:F.mono, fontSize:11, color: search.error ? C.red : C.muted, letterSpacing:"0.05em", padding:"8px 16px 6px" }}>
+                  {search.error ? `Search failed: ${search.error}` : search.busy ? "Searching…" : `${search.hits.length} digest${search.hits.length === 1 ? "" : "s"} mention “${search.q}”`}
+                </div>
+                {search.hits.map(h => {
+                  const active = selected && selected.id === h.id;
+                  return (
+                    <div key={h.id} onClick={() => onSelect(h.id)} style={{ padding:"9px 16px", cursor:"pointer", background: active ? C.orangeDim : "transparent", borderLeft:`3px solid ${active ? C.orange : "transparent"}` }}>
+                      <div style={{ display:"flex", justifyContent:"space-between", gap:8, fontFamily:F.body, fontSize:13, color: active ? C.orange : C.text, textTransform:"capitalize" }}>
+                        <span>{MODE_ICON[h.mode] || "📄"} {h.mode} · {h.date}</span>
+                        <span style={{ fontFamily:F.mono, fontSize:11, color:C.faint }}>{h.matches}</span>
+                      </div>
+                      {h.lines.map((l, i) => <div key={i} style={{ fontFamily:F.body, fontSize:12, color:C.muted, lineHeight:1.45, marginTop:4, overflowWrap:"anywhere" }}>{l}</div>)}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {!searching && dates.map(date => (
               <div key={date} style={{ marginBottom:6 }}>
                 <div style={{ fontFamily:F.mono, fontSize:11, color:C.muted, letterSpacing:"0.05em", padding:"8px 16px 4px" }}>{date}</div>
                 {grouped[date].map(e => {
@@ -1532,7 +1827,7 @@ function OutputTab({ entries, selectedId, onSelect, onRemove, onImport, showDefa
                       display:"flex", alignItems:"center", justifyContent:"space-between", gap:6, padding:"8px 16px",
                       cursor:"pointer", background: active ? C.orangeDim : "transparent", borderLeft:`3px solid ${active ? C.orange : "transparent"}` }}>
                       <span style={{ fontFamily:F.body, fontSize:13, color: active ? C.orange : C.text, textTransform:"capitalize", display:"flex", alignItems:"center", gap:6 }}>
-                        <span>{MODE_ICON[e.mode] || "📄"}</span>{e.mode}
+                        <span>{MODE_ICON[e.mode] || "📄"}</span>{e.mode}{e.grade && <span title={`Grade ${e.grade.score} · ${GRADE_LOOK[e.grade.verdict]?.label || e.grade.verdict}`} style={{ width:6, height:6, borderRadius:"50%", background:(GRADE_LOOK[e.grade.verdict] || GRADE_LOOK.attention).color, marginLeft:2 }} />}
                       </span>
                       <span onClick={ev => { ev.stopPropagation(); onRemove(e.id); }} style={{ color:C.faint, fontSize:12, cursor:"pointer" }}>✕</span>
                     </div>
@@ -1566,12 +1861,13 @@ function OutputTab({ entries, selectedId, onSelect, onRemove, onImport, showDefa
                     ))}
                   </div>
                 </div>
-                {!parts ? <div className="md-reader" dangerouslySetInnerHTML={{ __html: renderMD(view.text) }} /> : <div className="md-reader">
-                  {parts.pre && <div dangerouslySetInnerHTML={{ __html: renderMD(parts.pre) }} />}
+                <GradePanel key={selected.id} entry={selected} onGraded={onGraded} />
+                {!parts ? <div className="md-reader" dangerouslySetInnerHTML={{ __html: highlightHTML(renderMD(view.text), searching ? search.q : "") }} /> : <div className="md-reader">
+                  {parts.pre && <div dangerouslySetInnerHTML={{ __html: highlightHTML(renderMD(parts.pre), searching ? search.q : "") }} />}
                   {parts.sections.map(sec => (
-                    <details key={sec.key} className="md-sec" open={!collapsed[sec.key]} onToggle={e => toggleSection(sec.key, !e.currentTarget.open)}>
+                    <details key={sec.key} className="md-sec" open={!collapsed[sec.key] || (searching && !!search.q && sec.body.toLowerCase().includes(search.q.toLowerCase()))} onToggle={e => { if (!searching) toggleSection(sec.key, !e.currentTarget.open); }}>
                       <summary className="md-sum">{sec.title}{sec.count > 0 && <span className="md-count">{sec.count}</span>}</summary>
-                      <div dangerouslySetInnerHTML={{ __html: renderMD(sec.body) }} />
+                      <div dangerouslySetInnerHTML={{ __html: highlightHTML(renderMD(sec.body), searching ? search.q : "") }} />
                     </details>
                   ))}
                 </div>}
@@ -1581,6 +1877,7 @@ function OutputTab({ entries, selectedId, onSelect, onRemove, onImport, showDefa
             )}
           </div>
         </div>
+        </>
       )}
     </div>
   );
@@ -1666,7 +1963,7 @@ function DigestConfig() {
   const refreshEntries = async () => {
     try {
       const { digests } = await api("/api/digests");
-      setOutputEntries(digests.map(d => ({ id: d.id, date: d.date, mode: d.mode, savedAt: d.createdAt, content: d.content, lookback: d.lookback })));
+      setOutputEntries(digests.map(d => ({ id: d.id, date: d.date, mode: d.mode, savedAt: d.createdAt, content: d.content, lookback: d.lookback, grade: d.grade })));
     } catch(e) { /* server offline — badge already shows it */ }
   };
 
@@ -1850,6 +2147,18 @@ function DigestConfig() {
 
   const update = (path, value) => setConfig(prev => setPath(prev, path, value));
 
+  // "≈ 420 stories · about 9 min" under Run News Digest, for the settings on screen (from the last few runs).
+  const [estimate, setEstimate] = useState(null);
+  const configKey = stableJson([config.topics, config.sources, config.customSources, config.schedule.lookbackWindow, config.format.digestSize]);
+  useEffect(() => {
+    let alive = true;
+    const t = setTimeout(async () => {
+      try { const res = await api("/api/estimate", { method: "POST", body: config, timeoutMs: 8000 }); if (alive) setEstimate(res.estimate); }
+      catch(e) { if (alive) setEstimate(null); }
+    }, 600);
+    return () => { alive = false; clearTimeout(t); };
+  }, [configKey]);
+
   const updateLLMPrimary = (model) => {
     const all = ["gemini", "claude", "ollama"];
     const fallback = all.filter(x => x !== model);
@@ -1862,7 +2171,7 @@ function DigestConfig() {
   };
 
   const applyTemplate = (id) => {
-    setConfig(deepClone(id === "blank" ? BLANK_CONFIG : DEFAULT_CONFIG));
+    setConfig(prev => applyStartingPoint(prev, id));
     setTab("topics");
   };
 
@@ -1935,7 +2244,7 @@ function DigestConfig() {
   };
 
   const enabledTopics  = TOPICS.filter(t => config.topics[t]).length;
-  const enabledSources = Object.entries(config.sources).filter(([src, on]) => on && COUNTABLE_SOURCE_SET.has(src)).length + config.customSources.rss.length + config.customSources.youtube.length;
+  const enabledSources = Object.entries(config.sources).filter(([src, on]) => on && COUNTABLE_SOURCE_SET.has(src)).length + config.customSources.rss.length + config.customSources.youtube.length + (config.customSources.bluesky || []).length;
 
   const content = (
     <KeysCtx.Provider value={{ keys, saveKeys, keyStorage }}>
@@ -1946,7 +2255,7 @@ function DigestConfig() {
       {tab === "schedule"  && <React.Fragment><ScheduleTab config={config} update={update} pending={schedulePending} /><RollupsTab config={config} update={update} /></React.Fragment>}
       {tab === "llm"       && <LLMTab       config={config} update={update} updateLLMPrimary={updateLLMPrimary} runForPrompt={runForPrompt} promptResult={promptResult} promptParts={promptParts} promptRunState={promptRunState} secrets={secrets} />}
       {tab === "format"    && <FormatTab    config={config} update={update} />}
-      {tab === "output"    && <OutputTab showDefaults={{ excluded: config.format.showExcluded !== false, everythingElse: config.format.showEverythingElse !== false }} entries={outputEntries} selectedId={selectedEntryId} onSelect={setSelectedEntryId} onRemove={removeEntry} onImport={importMdFile} />}
+      {tab === "output"    && <OutputTab showDefaults={{ excluded: config.format.showExcluded !== false, everythingElse: config.format.showEverythingElse !== false }} entries={outputEntries} selectedId={selectedEntryId} onSelect={setSelectedEntryId} onRemove={removeEntry} onImport={importMdFile} onGraded={refreshEntries} />}
     </KeysCtx.Provider>
   );
 
@@ -1998,6 +2307,12 @@ function DigestConfig() {
       </div>
       <div style={{ display:"flex", flexDirection:"column", alignItems:"center", minWidth:0, position:"relative" }}>
         <RunButton runState={runState} liveRun={liveRun} onRun={runNow} />
+        {estimate && estimate.stories > 0 && runState !== "running" && !liveRun && (
+          <div title={`A rough forecast for the settings on screen, from your last ${estimate.runs} run${estimate.runs === 1 ? "" : "s"}`}
+            style={{ position:"absolute", top:"calc(100% + 1px)", fontFamily:F.mono, fontSize:10, color:C.faint, letterSpacing:"0.03em", whiteSpace:"nowrap" }}>
+            ≈ {estimate.stories} stories{estimate.minutes ? ` · about ${estimate.minutes} min` : ""}
+          </div>
+        )}
         {runState==="error" && runError && (
           // Above the button: the bar is the bottom edge of the window, so anything below it was cut off.
           <div role="alert" style={{ position:"absolute", bottom:"calc(100% + 10px)", width:520, maxWidth:"86vw", maxHeight:"50vh", overflowY:"auto", background:C.panel, border:`1px solid ${C.redLn}`, borderRadius:5, padding:"11px 34px 12px 14px", zIndex:10, boxShadow:"0 8px 28px rgba(0,0,0,.55)", userSelect:"text" }}>

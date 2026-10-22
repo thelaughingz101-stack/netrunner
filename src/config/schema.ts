@@ -52,6 +52,8 @@ export const ConfigSchema = z.object({
     mode: z.enum(['llm', 'chatbot']).default('llm'),
     primary: z.enum(ENGINES).default('gemini'),
     fallbackChain: z.array(z.enum(ENGINES)).default(['claude', 'ollama']),
+    // Grade each digest after it's written (pipeline/grade): read-only checks, results on the Output tab.
+    grade: z.boolean().default(true),
     apiKeys: z.record(z.string(), z.string()).optional(), // stripped — keys in .env
   }).prefault({}),
   format: z.object({
@@ -63,6 +65,8 @@ export const ConfigSchema = z.object({
     showExcluded: z.boolean().default(true),
     // Same for 📋 Everything Else: the model still writes it (coverage needs a catch-all); this hides it.
     showEverythingElse: z.boolean().default(true),
+    // Light keeps about half the stories per source and per topic (ingest/limits.ts): shorter digest, shorter run.
+    digestSize: z.enum(['full', 'light']).default('full'),
   }).prefault({}),
   // Dropped before the per-source cap, so they don't crowd out real stories.
   filters: z.object({
@@ -76,7 +80,14 @@ export const ConfigSchema = z.object({
   customSources: z.object({
     rss: z.array(z.string().url()).default([]),
     youtube: z.array(YoutubeEntry).default([]),
-    xcancel: z.array(z.string().min(1)).default([]),
+    // X accounts (xcancel) are gone, replaced by Bluesky: an old saved list is dropped on load.
+    // Bluesky accounts (Add your own): read by DID, the permanent id; handle and name for the UI.
+    bluesky: z.array(z.object({
+      did: z.string().regex(/^did:(plc|web):/),
+      handle: z.string().min(1),
+      title: z.string().nullable().optional(),
+      avatar: z.string().nullable().optional(),
+    })).default([]),
   }).prefault({}),
 });
 
@@ -105,7 +116,7 @@ export function normalizeConfig(input: unknown): Config {
   // Custom Feeds is a section exactly when there are custom sources (the Format tab did this on open, which
   // made just viewing it count as an unsaved change). After the topics, so a new config lists it last.
   const cs = c.customSources;
-  const hasCustom = cs.rss.length + cs.youtube.length + cs.xcancel.length > 0;
+  const hasCustom = cs.rss.length + cs.youtube.length + cs.bluesky.length > 0;
   if (hasCustom && !c.format.sectionOrder.includes('Custom Feeds')) c.format.sectionOrder.push('Custom Feeds');
   if (!hasCustom) c.format.sectionOrder = c.format.sectionOrder.filter(t => t !== 'Custom Feeds');
 

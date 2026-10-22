@@ -3,8 +3,8 @@ import type { DigestPrompt } from '../prompt/index.js';
 export type Tier = 'gemini' | 'claude' | 'ollama';
 
 export interface LLMRequest {
-  /** digest = full digest, recovery = re-run for omitted items, rollup = weekly/monthly */
-  kind: 'digest' | 'recovery' | 'rollup';
+  /** digest = full digest, recovery = re-run for omitted items, rollup = weekly/monthly, grade = the AI grader */
+  kind: 'digest' | 'recovery' | 'rollup' | 'grade';
   prompt: DigestPrompt;
   /** Omission-protection tagging rule. Already inside prompt.system/geminiBody; Ollama's own
    *  RSS-only prompt doesn't include the system text, so it appends this separately. */

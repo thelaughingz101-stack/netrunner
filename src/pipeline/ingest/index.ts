@@ -1,10 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { dataDir } from '../../env.js';
+import { dataDir, env } from '../../env.js';
 import { db } from '../../db/db.js';
 import type { FeedResult, Item, RunContext } from '../types.js';
 import { buildFeedList } from './feedList.js';
+import { dbFeedCache } from './feedCache.js';
 import { deadFeedReport, fetchFeeds, type FetchText } from './fetchFeeds.js';
+import { resolveGoogleNewsLinks, type ResolveId } from './googleNews.js';
 import { normalize } from './normalize.js';
 import { clusterSameStory, contentFilter, dedupeAndSort, mergeAcrossCategories, timeWindow, topicFilter } from './filters.js';
 import { capPerSource, limitPerTopic, perSourceCap, perTopicLimit } from './limits.js';
@@ -15,10 +17,10 @@ export interface IngestResult {
 }
 
 /** Feed List → RSS Read → Shorts/Promo filter → Normalize & Tag → Time Window → Dedup + Sort → Per-source cap → Clustering → Topic Toggles → Cross-category merge → Per-topic limit. */
-export async function ingest(ctx: RunContext, opts: { fetchText?: FetchText; tries?: number } = {}): Promise<IngestResult> {
+export async function ingest(ctx: RunContext, opts: { fetchText?: FetchText; tries?: number; resolveGoogleNews?: ResolveId } = {}): Promise<IngestResult> {
   const { config, log } = ctx;
-  const { feeds, skippedXCancel } = buildFeedList(config);
-  log.info({ feeds: feeds.length, skippedXCancel, custom: feeds.filter(f => f.custom).length }, 'fetching feeds');
+  const { feeds } = buildFeedList(config);
+  log.info({ feeds: feeds.length, custom: feeds.filter(f => f.custom).length }, 'fetching feeds');
 
   // At most a few progress writes a second: a run fetches 100+ feeds.
   let shown = 0;
@@ -28,7 +30,11 @@ export async function ingest(ctx: RunContext, opts: { fetchText?: FetchText; tri
     ctx.progress?.(`Fetching sources (${done} of ${total})`);
   };
   fetching(0, feeds.length);
-  const { articles, results } = await fetchFeeds(feeds, log, { fetchText: opts.fetchText, tries: opts.tries, onProgress: fetching });
+  const { articles, results } = await fetchFeeds(feeds, log, {
+    fetchText: opts.fetchText, tries: opts.tries, onProgress: fetching,
+    // Tests hand in their own fetchText and get no cache.
+    cache: opts.fetchText ? undefined : dbFeedCache(),
+  });
   ctx.progress?.(`Sorting and tagging ${articles.length} stories`);
   const failed = results.filter(r => r.status === 'error');
   const empty = results.filter(r => r.status === 'empty');
@@ -39,19 +45,28 @@ export async function ingest(ctx: RunContext, opts: { fetchText?: FetchText; tri
   const dd = dedupeAndSort(win.items);
   // After the window and newest-first: each source keeps its newest stories inside the range (n8n capped
   // first, so a source could fill its 8 with stories the window then threw away).
-  const cap = capPerSource(dd.items, perSourceCap(ctx.lookbackWindow));
+  const size = config.format.digestSize;
+  const cap = capPerSource(dd.items, perSourceCap(ctx.lookbackWindow, size));
   const cl = clusterSameStory(cap.items);
   const tf = topicFilter(cl.items, config);
   // After the toggles, so a merged story never lands in a section that's switched off.
   const xc = mergeAcrossCategories(tf.items);
-  const lim = limitPerTopic(xc.items, perTopicLimit(ctx.lookbackWindow));
+  const lim = limitPerTopic(xc.items, perTopicLimit(ctx.lookbackWindow, size));
+  // The publishers' own links for the Google News stories that made it this far. Tests (which hand in their
+  // own fetchText) skip it unless they also hand in a resolver.
+  const resolve = opts.resolveGoogleNews ?? (opts.fetchText || !env().GNEWS_RESOLVE ? null : undefined);
+  const gn = resolve === null ? null : await resolveGoogleNewsLinks(lim.items, {
+    resolve,
+    onProgress: (done, total) => { if (total) ctx.progress?.(`Finding the real links for Google News stories (${done} of ${total})`); },
+  });
+  const kept = gn?.items ?? lim.items;
 
   const stats = {
     feedsAttempted: feeds.length,
     feedsOk: results.filter(r => r.status === 'ok').length,
     feedsEmpty: empty.length,
+    feedsUnchanged: results.filter(r => r.unchanged).length,
     feedsFailed: failed.length,
-    xcancelSkipped: skippedXCancel,
     articlesFetched: articles.length,
     droppedShorts: cf.droppedShorts,
     droppedPromotional: cf.droppedPromo,
@@ -63,20 +78,21 @@ export async function ingest(ctx: RunContext, opts: { fetchText?: FetchText; tri
     droppedTopicOff: tf.dropped,
     mergedAcrossCategories: xc.merged,
     droppedTopicLimit: lim.dropped,
-    itemsKept: lim.items.length,
+    itemsKept: kept.length,
+    ...(gn && (gn.stats.lookedUp || gn.stats.fromCache) ? { googleNewsLinks: gn.stats } : {}),
   };
   ctx.stats.ingest = stats;
   log.info(stats, 'ingestion complete');
   if (failed.length) log.warn({ dead: failed.map(f => ({ feed: f.feed, code: f.code })) }, `${failed.length} dead feeds`);
 
   recordFeedResults(ctx, results);
-  return { items: lim.items, feedResults: results };
+  return { items: kept, feedResults: results };
 }
 
 function recordFeedResults(ctx: RunContext, results: FeedResult[]) {
-  const ins = db().prepare('INSERT INTO feed_results (run_id, feed_name, url, status, item_count, error) VALUES (?, ?, ?, ?, ?, ?)');
+  const ins = db().prepare('INSERT INTO feed_results (run_id, feed_name, url, status, item_count, error, newest_at) VALUES (?, ?, ?, ?, ?, ?, ?)');
   db().transaction(() => {
-    for (const r of results) ins.run(ctx.runId, r.feed, r.url, r.status, r.itemCount, r.error ?? (r.code ? String(r.code) : null));
+    for (const r of results) ins.run(ctx.runId, r.feed, r.url, r.status, r.itemCount, r.error ?? (r.code ? String(r.code) : null), r.newestAt ?? null);
   })();
   const report = deadFeedReport(results);
   if (report && !ctx.dryRun) {

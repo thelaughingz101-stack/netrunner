@@ -17,16 +17,15 @@ const rss = (items: { title: string; link: string; date?: string; author?: strin
 </channel></rss>`;
 
 describe('feed list', () => {
-  it('skips xCancel, honors toggles, and injects custom sources', () => {
+  it('has no X feeds, honors toggles, and injects custom sources (Bluesky included)', () => {
     const config = normalizeConfig({
       sources: { IGN: false },
-      customSources: { rss: ['https://example.com/feed.xml'], youtube: [{ id: 'UC123', handle: '@me' }, 'UC456'], xcancel: ['someone'] },
+      customSources: { rss: ['https://example.com/feed.xml'], youtube: [{ id: 'UC123', handle: '@me' }, 'UC456'], bluesky: [{ did: 'did:plc:me', handle: 'me.bsky.social' }], xcancel: ['someone'] } as any,
     });
-    const { feeds, skippedXCancel } = buildFeedList(config);
-    expect(feeds.some(f => f.url.includes('xcancel.com'))).toBe(false);
-    expect(skippedXCancel).toBeGreaterThanOrEqual(45);
+    const { feeds } = buildFeedList(config);
+    expect(feeds.some(f => f.url.includes('xcancel.com'))).toBe(false); // an old saved X list is dropped too
     expect(feeds.some(f => f.sourceKey === 'IGN' || f.name === 'IGN')).toBe(false);
-    expect(feeds.filter(f => f.custom).map(f => f.name)).toEqual(['Custom RSS', '@me', 'Custom YouTube']);
+    expect(feeds.filter(f => f.custom).map(f => f.name)).toEqual(['Custom RSS', '@me', 'Custom YouTube', '@me.bsky.social']);
   });
 });
 

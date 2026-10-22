@@ -92,3 +92,60 @@ describe('Output reader (the page functions, run for real)', () => {
     expect(page().splitSections(md).sections[0].count).toBe(2);
   });
 });
+
+describe('digest rendering is safe (feed text reaches the page through the AI)', () => {
+  const block = src.slice(src.indexOf('// Digest text comes from feeds'), src.indexOf('const MD_STYLE'));
+  const renderMD = new Function(`${block}; return renderMD;`)();
+
+  it('a link cannot break out of its href, and only http(s) links become links', () => {
+    const html = renderMD('- [**Click**](https://x.dev/a" onmouseover="alert(1)) — hi');
+    expect(html).not.toMatch(/"\s*onmouseover=/);
+    expect(html).toContain('href="https://x.dev/a&quot; onmouseover=&quot;alert(1"');
+    expect(renderMD('[x](javascript:alert(1))')).not.toContain('<a ');
+    expect(renderMD('[x](data:text/html,hi)')).not.toContain('<a ');
+    expect(renderMD('<img src=x onerror=alert(1)>')).not.toContain('<img');
+    expect(renderMD('- [**Ok**](https://www.fda.gov/x) — fine')).toContain('<a class="md-link" href="https://www.fda.gov/x" target="_blank" rel="noopener noreferrer"><strong>Ok</strong></a>');
+  });
+
+  it('search highlighting marks text only, never inside a tag', () => {
+    const reader = src.slice(src.indexOf('// Marks a search term'), src.indexOf('// Output tab search: every saved digest'));
+    const highlightHTML = new Function(`${reader}; return highlightHTML;`)();
+    expect(highlightHTML('<a class="md-link" href="https://zelda.dev">Zelda news</a>', 'zelda'))
+      .toBe('<a class="md-link" href="https://zelda.dev"><mark class="md-mark">Zelda</mark> news</a>');
+  });
+});
+
+describe('Oct 22 additions', () => {
+  it('starting points: Everything on, Official only, Start fresh (no Entertainment or Light, nothing marked recommended)', () => {
+    for (const t of ['Everything on', 'Official only', 'Start fresh']) expect(src, t).toContain(t);
+    for (const gone of ['Entertainment only', 'id:"light", title', 'tag:"RECOMMENDED"']) expect(src, gone).not.toContain(gone);
+    expect(src).toContain('function applyStartingPoint');
+  });
+
+  it('Sources can be searched and narrowed to official bodies; Output searches every digest; Run shows a forecast', () => {
+    expect(src).toContain('Search sources');
+    expect(src).toContain('Official bodies only');
+    expect(src).toContain('/api/digests/search');
+    expect(src).toContain('/api/estimate');
+    expect(src).toContain('format.digestSize');
+  });
+});
+
+describe('grader and feed health on screen', () => {
+  it('Output shows the grade (and can grade a digest); Sources shows feed health; AI Writer can switch grading off', () => {
+    expect(src).toContain('function GradePanel');
+    expect(src).toContain('Grade this digest');
+    expect(src).toMatch(/\/api\/digests\/\$\{entry\.id\}\/grade/);
+    expect(src).toContain('function FeedHealthCard');
+    expect(src).toContain('/api/feeds/health');
+    expect(src).toContain('update("llm.grade", v)');
+  });
+});
+
+describe('Add your own: Bluesky', () => {
+  it('has a Bluesky box that checks the account before adding it', () => {
+    expect(src).toContain('function BlueskyField');
+    expect(src).toContain('/api/resolve-bluesky');
+    expect(src).toContain('customSources.bluesky');
+  });
+});

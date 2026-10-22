@@ -1,4 +1,4 @@
-// Writes the digest: one AI call (+ coverage recovery) for a normal run, one per topic for a big one
+// Writes the digest: one AI call (+ coverage recovery) for a normal run, a few calls of whole topics for a big one
 // (split.ts plans the calls and stitches the answers). Spec: docs/superpowers/specs/2026-10-16-per-topic-digests-design.md.
 import pLimit from 'p-limit';
 import type { Config } from '../config/schema.js';
@@ -25,8 +25,8 @@ interface CallResult {
   coverage?: CoverageStats;
 }
 
-/** A topic call either wrote its part or every AI tier failed. */
-type Outcome = { plan: CallPlan; r: CallResult } | { plan: CallPlan; err: AllTiersFailedError };
+/** A topic call either wrote its part or failed: every AI tier failed, or something else broke. */
+type Outcome = { plan: CallPlan; r: CallResult } | { plan: CallPlan; err: Error };
 
 /** One AI call over these items, then the coverage check (recovery rounds) on its answer. */
 async function writeOne(ctx: RunContext, config: Config, input: WriteInput, engine: EngineOptions): Promise<CallResult> {
@@ -48,9 +48,9 @@ export async function writeDigest(ctx: RunContext, input: WriteInput, engine: En
 
   const total = plans.length;
   let done = 0;
-  const progress = (extra = '') => ctx.progress?.(`Writing by topic: ${done} of ${total} done${extra}`);
+  const progress = (extra = '') => ctx.progress?.(`Writing in ${total} parts: ${done} done${extra}`);
   const label = (p: CallPlan) => (p.items.length ? p.topics.join(', ') : 'searches for the other topics');
-  ctx.log.info({ calls: total, stories: input.items.length }, 'big digest: one AI call per topic');
+  ctx.log.info({ calls: total, stories: input.items.length }, 'big digest: a few AI calls of whole topics');
   progress();
 
   // Nightly: each call gets this morning's sections for its own topics, so Story Updates covers every topic.
@@ -68,9 +68,10 @@ export async function writeDigest(ctx: RunContext, input: WriteInput, engine: En
         mode: input.mode, items: plan.items, morningDigest: slices[i], developing: i === 0 ? input.developing : [],
       }, callEngine);
       return { plan, r };
-    } catch (err) {
-      if (!(err instanceof AllTiersFailedError)) throw err;
-      ctx.log.warn({ topics: plan.topics, err: err.message }, 'topic call failed — listing its headlines without summaries');
+    } catch (e) {
+      // Any failure stays with its topic: rejecting the whole run here left the other calls running unseen.
+      const err = e instanceof Error ? e : new Error(String(e));
+      ctx.log.warn({ topics: plan.topics, err: err.message, ai: err instanceof AllTiersFailedError }, 'topic call failed — listing its headlines without summaries');
       return { plan, err };
     } finally {
       done++;
@@ -79,11 +80,14 @@ export async function writeDigest(ctx: RunContext, input: WriteInput, engine: En
   })));
 
   const ok = results.filter((x): x is { plan: CallPlan; r: CallResult } => 'r' in x);
-  const failed = results.filter((x): x is { plan: CallPlan; err: AllTiersFailedError } => 'err' in x);
+  const failed = results.filter((x): x is { plan: CallPlan; err: Error } => 'err' in x);
   if (!ok.length) throw failed[0].err;
 
   const placements: CoverageOutcome['placements'] = new Map(ok.flatMap(x => [...x.r.placements]));
   const failedItems = failed.flatMap(f => f.plan.items);
+  // Topics with stories are named; search-only topics that rode along are counted (their searches didn't run).
+  const failedTopics = failed.flatMap(f => f.plan.topics.filter(t => f.plan.items.some(i => i.category === t)));
+  const failedSearches = failed.flatMap(f => f.plan.topics.filter(t => !f.plan.items.some(i => i.category === t)));
   for (const it of failedItems) placements.set(it.id!, 'forced');
   if (failedItems.length) recordItems(ctx, failedItems, placements);
 
@@ -92,15 +96,16 @@ export async function writeDigest(ctx: RunContext, input: WriteInput, engine: En
     return keepUpdates[i] ? answer : stripSections(answer, /story updates/i);
   });
   let digest = stitch(answers, ctx.config.format.sectionOrder);
-  if (failed.length) digest = `${failureNote(failed.flatMap(f => f.plan.topics), failed[0].err.message)}\n\n${digest}`;
+  if (failed.length) digest = `${failureNote(failedTopics, failed[0].err.message, failedSearches.length)}\n\n${digest}`;
 
   const first = ok[0].r.llm;
   ctx.stats.llm = {
     ...first,
     truncated: ok.some(x => x.r.llm.truncated),
-    attempts: results.flatMap(x => ('r' in x ? x.r.llm.attempts : x.err.attempts)),
+    attempts: results.flatMap(x => ('r' in x ? x.r.llm.attempts : x.err instanceof AllTiersFailedError ? x.err.attempts : [])),
     calls: total,
-    failedTopics: failed.flatMap(f => f.plan.topics),
+    failedTopics,
+    ...(failedSearches.length ? { failedSearches } : {}),
   };
   const covs = ok.map(x => x.r.coverage).filter((c): c is CoverageStats => !!c);
   const sum = (k: 'expected' | 'firstPassMissing' | 'unknownIdsInOutput' | 'forced' | 'finalAccounted') => covs.reduce((n, c) => n + c[k], 0);

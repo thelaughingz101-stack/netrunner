@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { TOPICS } from '../src/catalog/index.js';
 import { normalizeConfig } from '../src/config/schema.js';
 import { buildLlmPayload, buildManualPrompt } from '../src/pipeline/prompt/index.js';
 import type { Item } from '../src/pipeline/types.js';
@@ -67,8 +68,10 @@ describe('Manual-mode exporters', () => {
     const gen = fs.readFileSync(path.resolve(__dirname, '../src/pipeline/prompt/generated/exportChatgpt.ts'), 'utf8').replace(/\r\n/g, '\n');
     const original = deployed('digest_export__ChatGPT_.js').replace(
       'in its single best-fit section (or 📋 Everything Else). Every other appearance',
-      'in its single best-fit section (or 📋 Everything Else), naming every outlet that covered it, e.g. *(Eurogamer, Kotaku)*. Every other appearance',
-    );
+      'in its single best-fit section (or 📋 Everything Else), naming every outlet that covered it, e.g. *(Eurogamer, Kotaku)*. '
+        + 'OFFICIAL SOURCES: feed items marked [official] come straight from a government agency, public body or nonprofit institution (the FDA, the Federal Reserve, the UN…). '
+        + 'When one covers a story, report what that body itself said, link its item, and name it first; outlets that covered the same story add context. Every other appearance',
+    ).replace('  return { title, url, source, snippet };', '  return { title, url, source: it.official && source ? `${source} [official]` : source, snippet };');
     expect(gen).toContain(original.slice(0, original.indexOf("const TZ = 'America/New_York';")));
     expect(gen).toContain(original.slice(original.indexOf('SUMMARIES: 2–3 sentences each, no filler.') + 'SUMMARIES: 2–3 sentences each, no filler.'.length));
   });
@@ -91,7 +94,7 @@ describe('Manual-mode exporters', () => {
 });
 
 describe('Topic toggles reach every prompt (n8n ignored them in places)', () => {
-  const TOPICS_ALL = ['Gaming', 'TV & Movies', 'Anime', 'Animation', 'Tech & Hardware', 'AI & LLMs', 'US Politics', 'World News', 'Business & Finance', 'Science & Space', 'Health', 'Security', 'Comics', 'Notable Trends', 'Blindspot Analysis', 'Leaks & Rumors', 'Custom Feeds'];
+  const TOPICS_ALL = TOPICS;
   const only = (...on: string[]) => normalizeConfig({ topics: Object.fromEntries(TOPICS_ALL.map(t => [t, on.includes(t)])) });
   const leaksOnly = only('Leaks & Rumors');
 
@@ -99,20 +102,22 @@ describe('Topic toggles reach every prompt (n8n ignored them in places)', () => 
     it(`AI Writer (${mode}), only Leaks on: searches only for leaks, headers only Leaks/Everything Else/EXCLUDED`, () => {
       const p = buildLlmPayload({ mode, items, morningDigest: '' }, leaksOnly, []);
       expect(p.user).toContain('- Gaming leaks and rumors ONLY from journalists');
-      for (const gone of ['trending X/Twitter', 'S&P 500', 'comic book releases', 'Science and space', 'Anime news', 'Cybersecurity', 'OFFICIALLY announced', 'Blindspot']) expect(p.user).not.toContain(gone);
+      for (const gone of ['Top 10 trending', 'S&P 500', 'comic book releases', 'Science and space', 'Anime news', 'Cybersecurity', 'OFFICIALLY announced', 'Blindspot']) expect(p.user).not.toContain(gone);
       const headers = p.system.slice(p.system.indexOf('REQUIRED HEADER ORDER')).split('\n').filter(l => l.startsWith('## '));
       expect(headers).toEqual([...(mode === 'nightly' ? ['## 🔄 Story Updates'] : []), '## 🕵️ Leaks & Rumors', '## 📋 Everything Else', '## 🗒️ EXCLUDED']);
       expect(p.system).not.toContain('## 👁️ Blindspot Analysis, ## 🕵️ Leaks & Rumors, and');
       expect(p.system).toContain('never in 📋 Everything Else');
     });
 
-    it(`AI Writer (${mode}), everything on: same search list n8n sent`, () => {
+    it(`AI Writer (${mode}), everything on: the search list n8n sent, but trends from anywhere, not X`, () => {
       const p = buildLlmPayload({ mode, items, morningDigest: '' }, normalizeConfig({}), []);
       const original = deployed('Build LLM Payload.js');
       const marker = mode === 'nightly' ? "Produce tonight's digest" : "Produce this morning's digest";
       const block = original.slice(original.indexOf('Also search for', original.indexOf(marker)), original.indexOf('that other major outlets are ignoring', original.indexOf(marker))).split('\\n').slice(1);
       expect(block.length).toBe(11);
-      for (const line of block) expect(p.user).toContain(line);
+      for (const line of block.filter(l => !/X\/Twitter/.test(l))) expect(p.user).toContain(line);
+      expect(p.user).not.toContain('X/Twitter');
+      expect(p.user).toContain('- Top 10 trending US topics right now (Google Trends, Reddit, Bluesky;');
     });
   }
 
@@ -128,6 +133,40 @@ describe('Topic toggles reach every prompt (n8n ignored them in places)', () => 
       expect(sys.split('\n').filter(l => /^## /.test(l)), platform).toEqual(['## 🩺 Health', '## 📋 Everything Else', '## 🗒️ EXCLUDED']);
       expect(sys, platform).toContain('- 🩺 Health — official public-health bodies');
     }
+  });
+
+  it('Weather & Disasters (added in NetRunner): its own section after Health, and its own search', () => {
+    const p = buildLlmPayload({ mode: 'morning', items, morningDigest: '' }, only('Weather & Disasters'), []);
+    const headers = p.system.slice(p.system.indexOf('REQUIRED HEADER ORDER')).split('\n').filter(l => l.startsWith('## '));
+    expect(headers).toEqual(['## 🌪️ Weather & Disasters', '## 📋 Everything Else', '## 🗒️ EXCLUDED']);
+    expect(p.user).toContain('- Severe weather and natural disasters overnight (official National Weather Service');
+    const all = buildLlmPayload({ mode: 'morning', items, morningDigest: '' }, normalizeConfig({}), []).system;
+    expect(all.indexOf('## 🌪️ Weather & Disasters')).toBe(all.indexOf('## 🩺 Health\n') + '## 🩺 Health\n'.length);
+    for (const platform of ['chatgpt', 'claude', 'gemini', 'grok', 'deepseek'] as const) {
+      const cfg = only('Weather & Disasters');
+      const sys = buildManualPrompt({ mode: 'morning', items, morningDigest: '' }, normalizeConfig({ ...cfg, delivery: { ...cfg.delivery, chatbotPlatform: platform } }), '2026-10-08').systemInstructions;
+      expect(sys.split('\n').filter(l => /^## /.test(l)), platform).toEqual(['## 🌪️ Weather & Disasters', '## 📋 Everything Else', '## 🗒️ EXCLUDED']);
+      expect(sys, platform).toContain('- 🌪️ Weather & Disasters — official warnings');
+    }
+  });
+
+  it('Music (added in NetRunner): its own section after Animation, its own search, and Billboard lives there', () => {
+    const p = buildLlmPayload({ mode: 'morning', items, morningDigest: '' }, only('Music'), []);
+    expect(p.system.slice(p.system.indexOf('REQUIRED HEADER ORDER')).split('\n').filter(l => l.startsWith('## '))).toEqual(['## 🎵 Music', '## 📋 Everything Else', '## 🗒️ EXCLUDED']);
+    expect(p.user).toContain('- Major music news overnight');
+    const all = buildLlmPayload({ mode: 'morning', items, morningDigest: '' }, normalizeConfig({}), []).system;
+    expect(all.indexOf('## 🎵 Music')).toBe(all.indexOf('## 🎨 Animation\n') + '## 🎨 Animation\n'.length);
+    for (const platform of ['chatgpt', 'claude', 'gemini', 'grok', 'deepseek'] as const) {
+      const cfg = only('Music');
+      const sys = buildManualPrompt({ mode: 'morning', items, morningDigest: '' }, normalizeConfig({ ...cfg, delivery: { ...cfg.delivery, chatbotPlatform: platform } }), '2026-10-08').systemInstructions;
+      expect(sys, platform).toContain('- 🎵 Music — releases, tours, charts');
+    }
+  });
+
+  it('search results must look like feed items: linked headline and a named outlet', () => {
+    const p = buildLlmPayload({ mode: 'morning', items, morningDigest: '' }, normalizeConfig({}), []);
+    expect(p.system).toContain('Search-sourced items use the same bullet format as feed items');
+    expect(p.system).toContain('*(ComicList)*');
   });
 
   it('Media Announcements (folded into TV & Movies) is gone from every prompt; announcement searches follow their own topics', () => {

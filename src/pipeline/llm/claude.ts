@@ -24,7 +24,8 @@ export function claudeProvider(makeClient?: () => Anthropic): Provider {
             model,
             max_tokens: 32000,
             system: req.prompt.system,
-            tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 8 }],
+            // The grader judges only the digest in front of it: no searching.
+            ...(req.kind === 'grade' ? {} : { tools: [{ type: 'web_search_20250305' as const, name: 'web_search' as const, max_uses: 8 }] }),
             messages,
           }, { signal }).finalMessage();
           if (final.stop_reason !== 'pause_turn') break;

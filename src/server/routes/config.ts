@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { uiCatalog } from '../../catalog/index.js';
 import { normalizeConfig } from '../../config/schema.js';
 import { getConfig, saveConfig, secretStatus } from '../../config/store.js';
+import { estimateRun } from '../../pipeline/estimate.js';
 import { keyStatus } from '../../secrets.js';
 import { vaultProblems, vaultStorage } from '../../vault.js';
 
@@ -19,6 +20,9 @@ export async function configRoutes(app: FastifyInstance) {
     const { config, version } = saveConfig(req.body);
     return { config, version, secrets: secretStatus() };
   });
+
+  // The forecast shown next to Run News Digest, for the settings on screen (saved or not).
+  app.post('/estimate', async req => ({ estimate: estimateRun(normalizeConfig(req.body ?? {})) }));
 
   // Import settings: checks a file from Export settings (or an old n8n digest-config.json) and fills in
   // anything it's missing. Doesn't save: the UI shows the result and the user presses Save, like a template.

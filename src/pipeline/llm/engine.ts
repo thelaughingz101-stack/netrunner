@@ -20,7 +20,15 @@ export interface EngineOptions {
   sleep?: (ms: number) => Promise<void>;
   /** Called as each attempt starts (the app shows it on the Run button, see explain.ts attemptStage). */
   onAttempt?: (a: AttemptStart) => void;
+  /** Epoch ms by which every attempt must be over (the run's time limit, RUN_DEADLINE_MS). */
+  deadline?: number;
+  /** Test seam: the least time left for an attempt to start (default MIN_ATTEMPT_MS). */
+  minAttemptMs?: number;
 }
+
+/** An attempt needs at least this long; with less left before the deadline, none is started. */
+const MIN_ATTEMPT_MS = 60_000;
+export const OUT_OF_TIME = "not tried: the run's time limit was reached";
 
 /** Shown to the user (plain words, one line per AI); the raw errors are in `attempts`, the log and the run's stats. */
 export class AllTiersFailedError extends Error {
@@ -88,8 +96,9 @@ export async function generate(req: LLMRequest, config: Config, log: Logger, opt
   let truncatedFallback: { tier: Tier; out: ProviderOutput } | null = null;
   let loopedFallback: { tier: Tier; out: ProviderOutput } | null = null;
   let firstTried: Tier | undefined;
+  const left = () => (opts.deadline === undefined ? Infinity : opts.deadline - Date.now());
 
-  for (const tier of tierOrder(config)) {
+  tiers: for (const tier of tierOrder(config)) {
     const p = providers[tier];
     const why = p.unavailable();
     if (why) {
@@ -99,8 +108,15 @@ export async function generate(req: LLMRequest, config: Config, log: Logger, opt
     }
     let loopedOnce = false;
     for (let attempt = 1; attempt <= tries; attempt++) {
+      if (left() < (opts.minAttemptMs ?? MIN_ATTEMPT_MS)) {
+        attempts.push({ tier, attempt, ok: false, ms: 0, error: OUT_OF_TIME });
+        log.warn({ tier, attempt, kind: req.kind }, 'run time limit reached — no more AI attempts');
+        break tiers;
+      }
       const t0 = Date.now();
-      const signal = AbortSignal.timeout(timeoutMs);
+      // Never past the run's deadline: an answer that arrives later couldn't be used anyway.
+      const callMs = Math.min(timeoutMs, left());
+      const signal = AbortSignal.timeout(callMs);
       firstTried ??= tier;
       const previous = attempts.filter(a => !a.ok && !a.skipped).at(-1);
       opts.onAttempt?.({ tier, attempt, of: tries, kind: req.kind, ...(tier !== firstTried ? { fallbackFrom: firstTried } : {}), ...(previous ? { previous } : {}) });
@@ -134,7 +150,9 @@ export async function generate(req: LLMRequest, config: Config, log: Logger, opt
       } catch (err) {
         // Providers wrap the abort in their own message ("network error: …aborted"), so check the signal.
         // A timeout isn't retried: the identical request would just take as long again (×LLM_MAX_TRIES).
-        const le = signal.aborted
+        const le = signal.aborted && callMs < timeoutMs
+          ? new LLMError(`stopped after ${Math.round(callMs / 1000)}s: the run's time limit was reached`, false)
+          : signal.aborted
           ? new LLMError(`timed out after ${Math.round(timeoutMs / 1000)}s — the model was still writing; raise LLM_TIMEOUT_MS or LLM_TIMEOUT_PER_SOURCE_MS in .env`, false)
           : err instanceof LLMError ? err
           : new LLMError((err as Error).name === 'TimeoutError' ? `timed out after ${timeoutMs}ms` : (err as Error).message, true);
@@ -142,7 +160,7 @@ export async function generate(req: LLMRequest, config: Config, log: Logger, opt
         const more = le.retryable && attempt < tries;
         log.warn({ tier, attempt, kind: req.kind, status: le.status, retryable: le.retryable, err: le.message }, more ? 'LLM attempt failed — retrying' : 'LLM tier failed');
         if (!more) break;
-        await sleep(retryDelay(delay, attempt, le.status, le.message));
+        await sleep(Math.min(retryDelay(delay, attempt, le.status, le.message), Math.max(0, left())));
       }
     }
   }

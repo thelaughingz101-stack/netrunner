@@ -29,11 +29,13 @@ export function geminiProvider(fetchImpl: typeof fetch = llmFetch): Provider {
       const data: any = await res.json();
       const candidate = data?.candidates?.[0];
       const finishReason: string | null = candidate?.finishReason ?? null;
-      // drop any part flagged as internal thinking (Parse Response)
+      // drop any part flagged as internal thinking (Parse Response). Parts are pieces of one answer, cut wherever
+      // Gemini cut them: joined with '\n' (as n8n did) they broke links mid-address ("](https\n://www.reddit…",
+      // seen 2026-10-22), so they're joined as is, like Claude's blocks.
       const text = (candidate?.content?.parts || [])
         .filter((p: any) => p.text && !p.thought)
         .map((p: any) => p.text)
-        .join('\n')
+        .join('')
         .trim();
       if (!text) {
         const block = data?.promptFeedback?.blockReason;

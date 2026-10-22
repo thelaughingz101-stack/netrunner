@@ -14,7 +14,7 @@ STRICT RULES:
 - Do NOT use your training data to fill gaps
 - If a section has no RSS data, write "No data available — live search unavailable"
 - Skip these sections entirely (require live data you don't have):
-  - X/Twitter Trending Topics
+  - Trending Topics
   - Stock market numbers
   - Leaks & Rumors (cannot verify)
   - Premarket/market close data

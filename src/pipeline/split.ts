@@ -1,5 +1,5 @@
-// Big digests are written one topic per AI call (Zion, 2026-10-16): one call can't write ~560 stories
-// (Gemini hit its output limit and looped). This file plans the calls and stitches their answers; write.ts
+// Big digests are written in a few AI calls of whole topics (Zion, 2026-10-16; packed 2026-10-22): one call
+// can't write ~560 stories (Gemini hit its output limit and looped). This file plans the calls and stitches their answers; write.ts
 // runs them. Spec: docs/superpowers/specs/2026-10-16-per-topic-digests-design.md.
 import { TOPICS } from '../catalog/index.js';
 import type { Config } from '../config/schema.js';
@@ -17,8 +17,10 @@ export const SECTION_HEADERS: Record<string, string> = {
   'TV & Movies': '## 🎬 TV & Movies',
   'Anime': '## 🎌 Anime',
   'Animation': '## 🎨 Animation',
+  'Music': '## 🎵 Music',
   'Science & Space': '## 🔭 Science & Space',
   'Health': '## 🩺 Health',
+  'Weather & Disasters': '## 🌪️ Weather & Disasters',
   'Security': '## 🔒 Security',
   'Comics': '## 📚 Comics',
   'Custom Feeds': '## 📡 Custom Feeds',
@@ -28,14 +30,17 @@ export const SECTION_HEADERS: Record<string, string> = {
 };
 
 export interface CallPlan {
-  /** The topics this call writes: one, or every enabled topic that has no feed stories (searches only). */
+  /** The topics this call writes: several whole topics, plus any enabled topics that only have searches. */
   topics: string[];
   items: Item[];
 }
 
 /**
- * null = one call for everything (up to `limit` stories, as before). Otherwise one call per topic that has
- * stories, in the configured section order, plus one call for enabled topics that only have searches.
+ * null = one call for everything (up to `limit` stories, as before). Otherwise as few calls as fit: whole
+ * topics, in the configured section order, packed into evenly sized calls of at most `limit` stories (a topic
+ * is never split across calls). Enabled topics that only have searches ride along with the smallest call.
+ * Was one call per topic (2026-10-16), about 15 for a full digest: too many for Gemini's free tier, which
+ * allows 20 requests a day (Zion, 2026-10-22).
  */
 export function planCalls(items: Item[], config: Config, limit: number): CallPlan[] | null {
   if (items.length <= limit) return null;
@@ -44,21 +49,44 @@ export function planCalls(items: Item[], config: Config, limit: number): CallPla
     if (!byTopic.has(i.category)) byTopic.set(i.category, []);
     byTopic.get(i.category)!.push(i);
   }
-  const plans: CallPlan[] = [];
+  const withItems: [string, Item[]][] = [];
   const searchOnly: string[] = [];
   for (const topic of new Set([...config.format.sectionOrder, ...TOPICS, ...byTopic.keys()])) {
     const got = byTopic.get(topic);
-    if (got?.length) plans.push({ topics: [topic], items: got });
+    if (got?.length) withItems.push([topic, got]);
     else if (topic !== 'Custom Feeds' && TOPICS.includes(topic) && config.topics[topic] !== false) searchOnly.push(topic);
   }
-  if (searchOnly.length) plans.push({ topics: searchOnly, items: [] });
+  // As few calls as the limit allows, as evenly sized as whole topics in order allow: the smallest cap that
+  // packs them into that many calls (274 stories, limit 150: two calls of about 137, not 150 + 124 or three).
+  const sizes = withItems.map(([, got]) => got.length);
+  const pack = (cap: number) => {
+    const groups: number[][] = [];
+    sizes.forEach((n, i) => {
+      const last = groups.at(-1);
+      if (last && last.reduce((a, j) => a + sizes[j], 0) + n <= cap) last.push(i); else groups.push([i]);
+    });
+    return groups;
+  };
+  let calls = Math.ceil(items.length / limit);
+  let cap = Math.max(...sizes);
+  for (;;) {
+    while (pack(cap).length > calls) cap++;
+    if (cap <= limit || cap === Math.max(...sizes)) break;
+    calls++;
+    cap = Math.max(...sizes);
+  }
+  const plans: CallPlan[] = pack(cap).map(g => ({ topics: g.map(i => withItems[i][0]), items: g.flatMap(i => withItems[i][1]) }));
+  if (searchOnly.length) {
+    const smallest = plans.reduce((a, b) => (b.items.length < a.items.length ? b : a));
+    smallest.topics.push(...searchOnly);
+  }
   return plans;
 }
 
 /** The run's config with only this call's topics on (their searches and rules follow), custom feeds only for the Custom Feeds call. */
 export function callConfig(config: Config, plan: CallPlan): Config {
   const topics = Object.fromEntries(Object.keys(config.topics).map(t => [t, plan.topics.includes(t)]));
-  const customSources = plan.topics.includes('Custom Feeds') ? config.customSources : { rss: [], youtube: [], xcancel: [] };
+  const customSources = plan.topics.includes('Custom Feeds') ? config.customSources : { rss: [], youtube: [], bluesky: [] };
   return { ...config, topics, customSources };
 }
 
@@ -134,7 +162,11 @@ export function plainSections(plan: CallPlan): string {
 }
 
 /** The note at the top of a digest when some topics couldn't be written: which, and why (explain.ts wording). */
-export function failureNote(topics: string[], reason: string): string {
+export function failureNote(topics: string[], reason: string, searchesLost = 0): string {
   const why = reason.split('\n').filter(l => l.startsWith('• '));
-  return [`⚠️ **Some topics couldn't be written: ${topics.join(', ')}.** Their headlines are listed without summaries.`, ...why].join('\n');
+  const searches = searchesLost ? ` The web searches for ${searchesLost} other topic${searchesLost === 1 ? '' : 's'} didn't run either.` : '';
+  const head = topics.length
+    ? `⚠️ **Some topics couldn't be written: ${topics.join(', ')}.** Their headlines are listed without summaries.${searches}`
+    : `⚠️ **The web searches for ${searchesLost} topic${searchesLost === 1 ? '' : 's'} didn't run.**`;
+  return [head, ...why].join('\n');
 }

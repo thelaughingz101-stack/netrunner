@@ -7,8 +7,12 @@ export const PER_SOURCE_BY_RANGE: Record<string, number> = { '12h': 8, '24h': 12
 /** Stories kept per topic: the ones the most outlets covered, then the newest. */
 export const PER_TOPIC_BY_RANGE: Record<string, number> = { '12h': 25, '24h': 30, '3d': 40, '1w': 55, '2w': 65, '1mo': 80 };
 
-export const perSourceCap = (lookback: string) => PER_SOURCE_BY_RANGE[lookback] ?? PER_SOURCE_BY_RANGE['12h'];
-export const perTopicLimit = (lookback: string) => PER_TOPIC_BY_RANGE[lookback] ?? PER_TOPIC_BY_RANGE['12h'];
+/** Format → Digest size. Light keeps about half of each: a shorter digest and a shorter run (Zion, 2026-10-22). */
+export type DigestSize = 'full' | 'light';
+const sized = (n: number, size: DigestSize = 'full') => (size === 'light' ? Math.max(3, Math.ceil(n / 2)) : n);
+
+export const perSourceCap = (lookback: string, size?: DigestSize) => sized(PER_SOURCE_BY_RANGE[lookback] ?? PER_SOURCE_BY_RANGE['12h'], size);
+export const perTopicLimit = (lookback: string, size?: DigestSize) => sized(PER_TOPIC_BY_RANGE[lookback] ?? PER_TOPIC_BY_RANGE['12h'], size);
 
 /** Hand-picked by the user, so never limited. */
 const EXEMPT = 'Custom Feeds';

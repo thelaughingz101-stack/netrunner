@@ -33,6 +33,9 @@ export function whyFailed(a: AttemptLog): Why {
   if (has(/repeating itself/)) {
     return { what: 'got stuck repeating itself' };
   }
+  if (has(/run's time limit/)) {
+    return { what: 'ran out of time (the run hit its time limit)', fix: 'Turn off some topics or sources, or pick a Light digest on the Format tab, so runs finish sooner.' };
+  }
   if (has(/timed out/i)) {
     return { what: 'took too long to answer', fix: 'Run it again, or turn off some topics or sources so the digest is smaller.' };
   }
@@ -52,7 +55,7 @@ export function whyFailed(a: AttemptLog): Why {
   return { what: `failed: ${(a.error ?? a.skipped ?? 'unknown error').split('\n')[0].slice(0, 160)}` };
 }
 
-const NOUN: Record<LLMRequest['kind'], string> = { digest: 'the digest', rollup: 'the recap', recovery: 'the missed stories' };
+const NOUN: Record<LLMRequest['kind'], string> = { digest: 'the digest', rollup: 'the recap', recovery: 'the missed stories', grade: 'the grade' };
 
 /** "try 1", "tries 2–5" */
 const triesLabel = (nums: number[]) => nums.length === 1 ? `try ${nums[0]}` : `tries ${nums[0]}–${nums[nums.length - 1]}`;
@@ -62,7 +65,7 @@ const triesLabel = (nums: number[]) => nums.length === 1 ? `try ${nums[0]}` : `t
  * "overloaded (tries 2–5)") and what to do about the last one.
  */
 export function allFailedMessage(attempts: AttemptLog[], kind: LLMRequest['kind']): string {
-  const lines = [`No AI could write ${NOUN[kind]}:`];
+  const lines = [kind === 'grade' ? 'No AI could grade the digest:' : `No AI could write ${NOUN[kind]}:`];
   const tiers = [...new Set(attempts.map(a => a.tier))];
   for (const tier of tiers) {
     const failed = attempts.filter(a => a.tier === tier && !a.ok);
@@ -99,6 +102,10 @@ export interface AttemptStart {
 export function attemptStage(a: AttemptStart): string {
   const name = NAME[a.tier];
   const recovery = a.kind === 'recovery';
+  if (a.kind === 'grade') {
+    if (!a.previous) return `Grading the digest with ${name}`;
+    return `Grading: ${NAME[a.previous.tier]} ${whyFailed(a.previous).what}, so ${a.previous.tier === a.tier ? `trying again (attempt ${a.attempt} of ${a.of})` : `trying ${name} instead`}`;
+  }
   if (!a.previous) return recovery ? `Adding the stories the first draft missed, with ${name}` : `Writing ${NOUN[a.kind]} with ${name}`;
   const failed = `${NAME[a.previous.tier]} ${whyFailed(a.previous).what}`;
   const next = a.previous.tier === a.tier

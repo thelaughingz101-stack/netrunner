@@ -14,4 +14,4 @@ export interface SourceTag {
   category: string;
 }
 
-export type FeedKind = 'RSS' | 'YouTube' | 'xCancel';
+export type FeedKind = 'RSS' | 'YouTube' | 'Bluesky';

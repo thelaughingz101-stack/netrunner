@@ -7,10 +7,16 @@ const RANGES = ['12h', '24h', '3d', '1w', '2w', '1mo'];
 
 describe('range-aware limits', () => {
   it('grow with the catch-up range, slowing down', () => {
-    expect(RANGES.map(perSourceCap)).toEqual([8, 12, 20, 30, 40, 50]);
-    expect(RANGES.map(perTopicLimit)).toEqual([25, 30, 40, 55, 65, 80]);
+    expect(RANGES.map(r => perSourceCap(r))).toEqual([8, 12, 20, 30, 40, 50]);
+    expect(RANGES.map(r => perTopicLimit(r))).toEqual([25, 30, 40, 55, 65, 80]);
     expect(perSourceCap('nonsense')).toBe(8);
     expect(perTopicLimit('nonsense')).toBe(25);
+  });
+
+  it('a Light digest keeps about half of each', () => {
+    expect(RANGES.map(r => perSourceCap(r, 'light'))).toEqual([4, 6, 10, 15, 20, 25]);
+    expect(RANGES.map(r => perTopicLimit(r, 'light'))).toEqual([13, 15, 20, 28, 33, 40]);
+    expect(RANGES.map(r => perTopicLimit(r, 'full'))).toEqual([25, 30, 40, 55, 65, 80]);
   });
 
   it('per source: keeps the first N of each built-in source, never limits Custom Feeds', () => {

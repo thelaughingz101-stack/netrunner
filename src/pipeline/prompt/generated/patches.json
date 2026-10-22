@@ -45,6 +45,31 @@
     "why": "Health topic: its section header."
   },
   {
+    "id": "weather-order-payload",
+    "node": "Build LLM Payload",
+    "why": "Weather & Disasters topic (added in NetRunner, not in n8n): its place in the default section order, after Health."
+  },
+  {
+    "id": "weather-header-payload",
+    "node": "Build LLM Payload",
+    "why": "Weather & Disasters topic: its section header."
+  },
+  {
+    "id": "music-order-payload",
+    "node": "Build LLM Payload",
+    "why": "Music topic (added in NetRunner, not in n8n; Billboard sat in Business & Finance): its place in the default section order, after Animation."
+  },
+  {
+    "id": "music-header-payload",
+    "node": "Build LLM Payload",
+    "why": "Music topic: its section header."
+  },
+  {
+    "id": "search-format-payload",
+    "node": "Build LLM Payload",
+    "why": "Search results came back as bare sentences with no link or outlet (6 US Politics bullets on 2026-10-19) and Comics release lines named no source, breaking \"every item must have a named source\"."
+  },
+  {
     "id": "topics-comics-rules-payload",
     "node": "Build LLM Payload",
     "why": "The Comics rules (\"always show all 8 publishers\") were sent even with Comics off."
@@ -65,6 +90,11 @@
     "why": "The ledger allowed only 4 reasons while FILLER REJECTION requires reason \"filler\" (the model already emitted it). Added filler as the 5th valid reason."
   },
   {
+    "id": "official-rule-payload",
+    "node": "Build LLM Payload",
+    "why": "Items from official bodies carry \"official\": true; when an agency and the press cover the same story, the agency's own word leads."
+  },
+  {
     "id": "summary-length-def-chatgpt",
     "node": "digest_export_(ChatGPT)",
     "why": "Copy-paste exporters ignored format.summaryLength; read it from the config (same three options as Build LLM Payload)."
@@ -78,6 +108,16 @@
     "id": "duplicates-cite-all-chatgpt",
     "node": "digest_export_(ChatGPT)",
     "why": "Copy-paste exporters: the story kept in its best-fit section now names every outlet that covered it, so dropping the other copies loses no attribution."
+  },
+  {
+    "id": "official-mark-chatgpt",
+    "node": "digest_export_(ChatGPT)",
+    "why": "Copy-paste exporters: mark items from official bodies in the feed list, so the OFFICIAL SOURCES rule can find them."
+  },
+  {
+    "id": "official-rule-chatgpt",
+    "node": "digest_export_(ChatGPT)",
+    "why": "Copy-paste exporters: an agency's own word leads a story the press also covered."
   },
   {
     "id": "topics-emoji-chatgpt",
@@ -125,6 +165,26 @@
     "why": "Health topic: its section rule."
   },
   {
+    "id": "weather-emoji-chatgpt",
+    "node": "digest_export_(ChatGPT)",
+    "why": "Weather & Disasters topic (added in NetRunner, not in n8n): its emoji, and its place in the default order after Health."
+  },
+  {
+    "id": "weather-rule-chatgpt",
+    "node": "digest_export_(ChatGPT)",
+    "why": "Weather & Disasters topic: its section rule."
+  },
+  {
+    "id": "music-emoji-chatgpt",
+    "node": "digest_export_(ChatGPT)",
+    "why": "Music topic (added in NetRunner, not in n8n): its emoji, and its place in the default order after Animation."
+  },
+  {
+    "id": "music-rule-chatgpt",
+    "node": "digest_export_(ChatGPT)",
+    "why": "Music topic: its section rule."
+  },
+  {
     "id": "topics-headers-bf-chatgpt",
     "node": "digest_export_(ChatGPT)",
     "why": "Hardcoded Business & Finance header removed (toggle-driven now)."
@@ -148,6 +208,16 @@
     "id": "duplicates-cite-all-claude",
     "node": "digest_export_(Claude)",
     "why": "Copy-paste exporters: the story kept in its best-fit section now names every outlet that covered it, so dropping the other copies loses no attribution."
+  },
+  {
+    "id": "official-mark-claude",
+    "node": "digest_export_(Claude)",
+    "why": "Copy-paste exporters: mark items from official bodies in the feed list, so the OFFICIAL SOURCES rule can find them."
+  },
+  {
+    "id": "official-rule-claude",
+    "node": "digest_export_(Claude)",
+    "why": "Copy-paste exporters: an agency's own word leads a story the press also covered."
   },
   {
     "id": "topics-emoji-claude",
@@ -195,6 +265,26 @@
     "why": "Health topic: its section rule."
   },
   {
+    "id": "weather-emoji-claude",
+    "node": "digest_export_(Claude)",
+    "why": "Weather & Disasters topic (added in NetRunner, not in n8n): its emoji, and its place in the default order after Health."
+  },
+  {
+    "id": "weather-rule-claude",
+    "node": "digest_export_(Claude)",
+    "why": "Weather & Disasters topic: its section rule."
+  },
+  {
+    "id": "music-emoji-claude",
+    "node": "digest_export_(Claude)",
+    "why": "Music topic (added in NetRunner, not in n8n): its emoji, and its place in the default order after Animation."
+  },
+  {
+    "id": "music-rule-claude",
+    "node": "digest_export_(Claude)",
+    "why": "Music topic: its section rule."
+  },
+  {
     "id": "topics-headers-bf-claude",
     "node": "digest_export_(Claude)",
     "why": "Hardcoded Business & Finance header removed (toggle-driven now)."
@@ -218,6 +308,16 @@
     "id": "duplicates-cite-all-grok",
     "node": "digest_export_(grok)",
     "why": "Copy-paste exporters: the story kept in its best-fit section now names every outlet that covered it, so dropping the other copies loses no attribution."
+  },
+  {
+    "id": "official-mark-grok",
+    "node": "digest_export_(grok)",
+    "why": "Copy-paste exporters: mark items from official bodies in the feed list, so the OFFICIAL SOURCES rule can find them."
+  },
+  {
+    "id": "official-rule-grok",
+    "node": "digest_export_(grok)",
+    "why": "Copy-paste exporters: an agency's own word leads a story the press also covered."
   },
   {
     "id": "topics-emoji-grok",
@@ -265,6 +365,26 @@
     "why": "Health topic: its section rule."
   },
   {
+    "id": "weather-emoji-grok",
+    "node": "digest_export_(grok)",
+    "why": "Weather & Disasters topic (added in NetRunner, not in n8n): its emoji, and its place in the default order after Health."
+  },
+  {
+    "id": "weather-rule-grok",
+    "node": "digest_export_(grok)",
+    "why": "Weather & Disasters topic: its section rule."
+  },
+  {
+    "id": "music-emoji-grok",
+    "node": "digest_export_(grok)",
+    "why": "Music topic (added in NetRunner, not in n8n): its emoji, and its place in the default order after Animation."
+  },
+  {
+    "id": "music-rule-grok",
+    "node": "digest_export_(grok)",
+    "why": "Music topic: its section rule."
+  },
+  {
     "id": "topics-headers-bf-grok",
     "node": "digest_export_(grok)",
     "why": "Hardcoded Business & Finance header removed (toggle-driven now)."
@@ -288,6 +408,16 @@
     "id": "duplicates-cite-all-deepseek",
     "node": "Digest_export_[DeepSeek]",
     "why": "Copy-paste exporters: the story kept in its best-fit section now names every outlet that covered it, so dropping the other copies loses no attribution."
+  },
+  {
+    "id": "official-mark-deepseek",
+    "node": "Digest_export_[DeepSeek]",
+    "why": "Copy-paste exporters: mark items from official bodies in the feed list, so the OFFICIAL SOURCES rule can find them."
+  },
+  {
+    "id": "official-rule-deepseek",
+    "node": "Digest_export_[DeepSeek]",
+    "why": "Copy-paste exporters: an agency's own word leads a story the press also covered."
   },
   {
     "id": "topics-emoji-deepseek",
@@ -333,6 +463,26 @@
     "id": "health-rule-deepseek",
     "node": "Digest_export_[DeepSeek]",
     "why": "Health topic: its section rule."
+  },
+  {
+    "id": "weather-emoji-deepseek",
+    "node": "Digest_export_[DeepSeek]",
+    "why": "Weather & Disasters topic (added in NetRunner, not in n8n): its emoji, and its place in the default order after Health."
+  },
+  {
+    "id": "weather-rule-deepseek",
+    "node": "Digest_export_[DeepSeek]",
+    "why": "Weather & Disasters topic: its section rule."
+  },
+  {
+    "id": "music-emoji-deepseek",
+    "node": "Digest_export_[DeepSeek]",
+    "why": "Music topic (added in NetRunner, not in n8n): its emoji, and its place in the default order after Animation."
+  },
+  {
+    "id": "music-rule-deepseek",
+    "node": "Digest_export_[DeepSeek]",
+    "why": "Music topic: its section rule."
   },
   {
     "id": "topics-headers-bf-deepseek",
@@ -385,6 +535,16 @@
     "why": "Copy-paste exporters: the story kept in its best-fit section now names every outlet that covered it, so dropping the other copies loses no attribution."
   },
   {
+    "id": "official-mark-gemini",
+    "node": "digest_export_(Gemini)",
+    "why": "Copy-paste exporters: mark items from official bodies in the feed list, so the OFFICIAL SOURCES rule can find them."
+  },
+  {
+    "id": "official-rule-gemini",
+    "node": "digest_export_(Gemini)",
+    "why": "Copy-paste exporters: an agency's own word leads a story the press also covered."
+  },
+  {
     "id": "topics-emoji-gemini",
     "node": "digest_export_(Gemini)",
     "why": "World News, Business & Finance and Blindspot become normal toggleable sections that follow the section order."
@@ -418,6 +578,26 @@
     "id": "health-rule-gemini",
     "node": "digest_export_(Gemini)",
     "why": "Health topic: its section rule."
+  },
+  {
+    "id": "weather-emoji-gemini",
+    "node": "digest_export_(Gemini)",
+    "why": "Weather & Disasters topic (added in NetRunner, not in n8n): its emoji, and its place in the default order after Health."
+  },
+  {
+    "id": "weather-rule-gemini",
+    "node": "digest_export_(Gemini)",
+    "why": "Weather & Disasters topic: its section rule."
+  },
+  {
+    "id": "music-emoji-gemini",
+    "node": "digest_export_(Gemini)",
+    "why": "Music topic (added in NetRunner, not in n8n): its emoji, and its place in the default order after Animation."
+  },
+  {
+    "id": "music-rule-gemini",
+    "node": "digest_export_(Gemini)",
+    "why": "Music topic: its section rule."
   },
   {
     "id": "topics-headers-bf-gemini",

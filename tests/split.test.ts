@@ -20,11 +20,23 @@ describe('one AI call per topic (big digests)', () => {
     expect(planCalls([item('Gaming', 1), item('Health', 1)], normalizeConfig({}), 2)).toBeNull();
   });
 
-  it('splits by topic in section order, plus one call for enabled topics that only have searches', () => {
+  it('splits by whole topics in section order; search-only topics ride along with the smallest call', () => {
     const config = normalizeConfig({ topics: Object.fromEntries(TOPICS.map(t => [t, ['Gaming', 'Health', 'Blindspot Analysis'].includes(t)])) });
     const items = [item('Health', 1), item('Gaming', 1), item('Gaming', 2)];
     const plans = planCalls(items, config, 2)!;
-    expect(plans.map(p => [p.topics, p.items.length])).toEqual([[['Gaming'], 2], [['Health'], 1], [['Blindspot Analysis'], 0]]);
+    expect(plans.map(p => [p.topics, p.items.length])).toEqual([[['Gaming'], 2], [['Health', 'Blindspot Analysis'], 1]]);
+  });
+
+  // Gemini's free tier allows 20 requests a day: one call per topic (~15) left nothing for the nightly digest.
+  it('packs topics into a few evenly sized calls instead of one per topic', () => {
+    const sizes: Record<string, number> = { Gaming: 25, 'TV & Movies': 25, Anime: 7, Animation: 10, Music: 12, 'Tech & Hardware': 25, 'AI & LLMs': 21, 'US Politics': 25, 'Business & Finance': 25, Health: 14, Security: 23, Comics: 25, 'Notable Trends': 22, 'Leaks & Rumors': 15 };
+    const items = Object.entries(sizes).flatMap(([t, n]) => Array.from({ length: n }, (_, i) => item(t, i)));
+    const plans = planCalls(items, normalizeConfig({}), 150)!;
+    expect(items.length).toBe(274);
+    expect(plans).toHaveLength(2);
+    for (const p of plans) expect(p.items.length).toBeLessThanOrEqual(150);
+    expect(plans.flatMap(p => p.topics.filter(t => sizes[t]))).toEqual(normalizeConfig({}).format.sectionOrder.filter(t => sizes[t]));
+    for (const p of plans) for (const t of p.topics) expect(p.items.filter(i => i.category === t).length).toBe(sizes[t] ?? 0); // never split
   });
 
   it('no extra call when every enabled topic has stories; Custom Feeds gets its own call', () => {

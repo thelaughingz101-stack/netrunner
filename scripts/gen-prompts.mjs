@@ -52,6 +52,25 @@ const DUPLICATE_PATCHES = [
 ];
 const dupes = name => DUPLICATE_PATCHES.map(p => ({ ...p, id: `${p.id}-${name}` }));
 
+// Official bodies (catalog OFFICIAL_SOURCES): when an agency and the press cover the same story, the agency's
+// own word leads. The AI Writer sees `"official": true` on the item; the copy-paste feed list marks the source.
+const OFFICIAL_RULE = 'OFFICIAL SOURCES: feed items marked official come straight from a government agency, public body or nonprofit institution (the FDA, the Federal Reserve, the UN…). When one covers a story, report what that body itself said, link its item, and name it first; outlets that covered the same story add context.';
+const OFFICIAL_PATCHES = [
+  {
+    id: 'official-mark',
+    why: 'Copy-paste exporters: mark items from official bodies in the feed list, so the OFFICIAL SOURCES rule can find them.',
+    from: '  return { title, url, source, snippet };',
+    to: "  return { title, url, source: it.official && source ? `${source} [official]` : source, snippet };",
+  },
+  {
+    id: 'official-rule',
+    why: 'Copy-paste exporters: an agency\'s own word leads a story the press also covered.',
+    from: 'naming every outlet that covered it, e.g. *(Eurogamer, Kotaku)*.',
+    to: 'naming every outlet that covered it, e.g. *(Eurogamer, Kotaku)*. ' + OFFICIAL_RULE.replace('feed items marked official', 'feed items marked [official]'),
+  },
+];
+const official = name => OFFICIAL_PATCHES.map(p => ({ ...p, id: `${p.id}-${name}` }));
+
 const TARGETS = [
   {
     file: 'Build LLM Payload.js', out: 'buildLlmPayload.ts', node: 'Build LLM Payload',
@@ -75,12 +94,18 @@ const TARGETS = [
         from: '"- Headline (Source) — reason: duplicate | stale | unverified | spam". If nothing was excluded, write "EXCLUDED: none". Rules for the ledger:\n- ONLY the four reasons above are valid. Not "review", not "opinion", not "not a comic", not "covered by RSS" — if none of duplicate/stale/unverified/spam fits,',
         to: '"- Headline (Source) — reason: duplicate | stale | unverified | spam | filler". If nothing was excluded, write "EXCLUDED: none". Rules for the ledger:\n- ONLY the five reasons above are valid. Not "review", not "opinion", not "not a comic", not "covered by RSS" — if none of duplicate/stale/unverified/spam/filler fits,',
       },
+      {
+        id: 'official-rule-payload',
+        why: 'Items from official bodies carry "official": true; when an agency and the press cover the same story, the agency\'s own word leads.',
+        from: 'RSS FEED DATA: You will receive pre-fetched RSS items as JSON. USE THEM as your primary source. Do not ignore them.',
+        to: 'RSS FEED DATA: You will receive pre-fetched RSS items as JSON. USE THEM as your primary source. Do not ignore them.\n' + OFFICIAL_RULE.replace('feed items marked official', 'feed items with "official": true'),
+      },
     ],
   },
-  { file: 'digest_export__ChatGPT_.js', out: 'exportChatgpt.ts', node: 'digest_export_(ChatGPT)', patches: [...summary('chatgpt'), ...dupes('chatgpt'), ...exporterTopicPatches('chatgpt')] },
-  { file: 'digest_export__Claude_.js', out: 'exportClaude.ts', node: 'digest_export_(Claude)', patches: [...summary('claude'), ...dupes('claude'), ...exporterTopicPatches('claude')] },
-  { file: 'digest_export__grok_.js', out: 'exportGrok.ts', node: 'digest_export_(grok)', patches: [...summary('grok'), ...dupes('grok'), ...exporterTopicPatches('grok')] },
-  { file: 'Digest_export__DeepSeek_.js', out: 'exportDeepseek.ts', node: 'Digest_export_[DeepSeek]', patches: [...summary('deepseek'), ...dupes('deepseek'), ...exporterTopicPatches('deepseek')] },
+  { file: 'digest_export__ChatGPT_.js', out: 'exportChatgpt.ts', node: 'digest_export_(ChatGPT)', patches: [...summary('chatgpt'), ...dupes('chatgpt'), ...official('chatgpt'), ...exporterTopicPatches('chatgpt')] },
+  { file: 'digest_export__Claude_.js', out: 'exportClaude.ts', node: 'digest_export_(Claude)', patches: [...summary('claude'), ...dupes('claude'), ...official('claude'), ...exporterTopicPatches('claude')] },
+  { file: 'digest_export__grok_.js', out: 'exportGrok.ts', node: 'digest_export_(grok)', patches: [...summary('grok'), ...dupes('grok'), ...official('grok'), ...exporterTopicPatches('grok')] },
+  { file: 'Digest_export__DeepSeek_.js', out: 'exportDeepseek.ts', node: 'Digest_export_[DeepSeek]', patches: [...summary('deepseek'), ...dupes('deepseek'), ...official('deepseek'), ...exporterTopicPatches('deepseek')] },
   {
     file: 'digest_export__Gemini_.js', out: 'exportGemini.ts', node: 'digest_export_(Gemini)',
     patches: [
@@ -116,6 +141,7 @@ const TARGETS = [
       },
       ...summary('gemini'),
       ...dupes('gemini'),
+      ...official('gemini'),
       ...exporterTopicPatches('gemini'),
     ],
   },

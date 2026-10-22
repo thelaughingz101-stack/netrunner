@@ -62,7 +62,13 @@ export const titleOverlap = (a: string, b: string) => {
   return smaller > 0 ? shared / smaller : 0;
 };
 
-/** Groups same-category items whose titles overlap ≥ 0.5 (greedy, first item is primary). */
+/**
+ * An agency's own item leads a story the press also covered (its link, title and summary; named first), so
+ * the AI cites what the FDA said rather than a write-up of it. Otherwise the order is kept (newest first).
+ */
+const officialFirst = (group: Item[]) => [...group.filter(g => g.official), ...group.filter(g => !g.official)];
+
+/** Groups same-category items whose titles overlap ≥ 0.5 (greedy; the first item, or an official one, is primary). */
 export function clusterSameStory(items: Item[], threshold = 0.5): { items: Item[]; merged: number } {
   const used = new Set<number>();
   const clusters: number[][] = [];
@@ -77,14 +83,15 @@ export function clusterSameStory(items: Item[], threshold = 0.5): { items: Item[
     }
     clusters.push(cluster);
   }
-  const out = clusters.map(group => {
-    if (group.length === 1) return items[group[0]];
-    const primary = items[group[0]];
+  const out = clusters.map(ids => {
+    if (ids.length === 1) return items[ids[0]];
+    const group = officialFirst(ids.map(idx => items[idx]));
+    const primary = group[0];
     return {
       ...primary,
-      source: group.map(idx => items[idx].source).join(', '),
+      source: group.map(g => g.source).join(', '),
       clusterSize: group.length,
-      clusterLinks: group.map(idx => items[idx].link).filter(Boolean),
+      clusterLinks: group.map(g => g.link).filter(Boolean),
       summary: primary.summary,
     };
   });
@@ -129,12 +136,13 @@ export function mergeAcrossCategories(items: Item[]): { items: Item[]; merged: n
   const out: Item[] = [];
   for (let i = 0; i < items.length; i++) {
     if (used.has(i)) continue;
-    const group = [items[i]];
+    const found = [items[i]];
     for (let j = i + 1; j < items.length; j++) {
       if (used.has(j) || items[j].category === items[i].category) continue;
-      if (sameStoryKeywords(keywords[i], keywords[j])) { group.push(items[j]); used.add(j); }
+      if (sameStoryKeywords(keywords[i], keywords[j])) { found.push(items[j]); used.add(j); }
     }
-    if (group.length === 1) { out.push(items[i]); continue; }
+    if (found.length === 1) { out.push(items[i]); continue; }
+    const group = officialFirst(found);
     const primary = group[0];
     out.push({
       ...primary,

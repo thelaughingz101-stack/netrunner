@@ -3,11 +3,14 @@
 // coverage diff/re-run → save → story tracker → delivery gates  |  [Manual] exporter → save.
 import { getConfig } from '../config/store.js';
 import { db } from '../db/db.js';
+import { env } from '../env.js';
 import { findDigest, saveDigest } from '../digests.js';
 import { log as rootLog } from '../logger.js';
 import { developingStories, headlinesFromRun, updateTracker } from '../stories/tracker.js';
 import { assignIds, dedupeBullets, forDelivery, stripTags } from './coverage/coverage.js';
 import { writeDigest } from './write.js';
+import { gradeDigest, saveGrade } from './grade/index.js';
+import { addMissingOutlets, resolveSearchRedirects } from './links.js';
 import { deliverAll, type DeliveryResult } from './delivery/registry.js';
 import type { DeliveryTarget } from './delivery/types.js';
 import { ingest } from './ingest/index.js';
@@ -27,6 +30,7 @@ export class RunInProgressError extends Error {
 
 // The lock lives in SQLite so the app and Task Scheduler's headless CLI runs exclude each other.
 // A holder whose process is gone (crash, killed window) or that is older than LOCK_STALE_MS is ignored.
+// Runs stop asking the AI at RUN_DEADLINE_MS (100 min), so a live run never outlasts this or Task Scheduler's 2 h.
 const LOCK_STALE_MS = 2 * 60 * 60 * 1000;
 
 const pidAlive = (pid: number) => {
@@ -154,11 +158,12 @@ async function digestRun(mode: Mode, lookbackWindow: string, opts: RunOptions): 
   const { config } = getConfig();
   const ctx = createRun({ config, mode, lookbackWindow, dryRun: !!opts.dryRun, trigger: opts.trigger, kind: 'digest', now: opts.now });
   const tracked = track(ctx, TITLES[mode], opts.engine);
+  const started = Date.now();
   return guarded(ctx, async () => {
     ctx.log.info({ trigger: opts.trigger, lookbackWindow }, 'digest run started');
     const { items: raw, feedResults } = await ingest(ctx, { fetchText: opts.fetchText, tries: opts.feedTries });
     const items = assignIds(raw);
-    const engine: EngineOptions = { timeoutMs: llmTimeoutFor(feedResults.length), ...tracked };
+    const engine: EngineOptions = { timeoutMs: llmTimeoutFor(feedResults.length), deadline: started + env().RUN_DEADLINE_MS, ...tracked };
     ctx.log.info({ sources: feedResults.length, llmTimeoutMs: engine.timeoutMs }, 'LLM timeout set from source count');
 
     // Nightly continuity: today's morning digest from the DB (n8n's file lookup had broken).
@@ -168,7 +173,15 @@ async function digestRun(mode: Mode, lookbackWindow: string, opts: RunOptions): 
 
     const written = await writeDigest(ctx, { mode, items, morningDigest, developing }, engine);
     // Repeated bullets come from an AI stuck in a loop; drop them whatever the run size.
-    const digest = dedupeBullets(stripTags(written.digest)).md;
+    const deduped = dedupeBullets(stripTags(written.digest)).md;
+    // Search results' Google redirect links → the articles' own; linked stories with no outlet get one.
+    if (/vertexaisearch\.cloud\.google\.com/.test(deduped)) ctx.progress?.('Finding the real links for search results');
+    const searched = await resolveSearchRedirects(deduped);
+    const outlets = addMissingOutlets(searched.md);
+    const digest = outlets.md;
+    if (searched.resolved || searched.unlinked || searched.failed || outlets.added) {
+      ctx.stats.links = { searchRedirectsResolved: searched.resolved, searchRedirectsDead: searched.unlinked, searchRedirectsKept: searched.failed, outletsAdded: outlets.added };
+    }
 
     const digestId = saveDigest({ runId: ctx.runId, date: ctx.today, mode, content: digest, dryRun: ctx.dryRun });
     if (!ctx.dryRun) {
@@ -178,6 +191,17 @@ async function digestRun(mode: Mode, lookbackWindow: string, opts: RunOptions): 
     const delivered = forDelivery(digest, config.format);
     ctx.progress?.('Delivering');
     const delivery = await deliverAll({ digest: delivered, mode, lookbackWindow }, ctx, opts.targets);
+    // After delivery, so grading never holds the digest up; a grader problem never fails the run.
+    if (config.llm.grade) {
+      ctx.progress?.('Grading the digest');
+      try {
+        const report = await gradeDigest({ content: digest, config, runStats: ctx.stats, writerTier: written.tier }, { log: ctx.log, engine });
+        saveGrade(digestId, ctx.runId, report);
+        ctx.stats.grade = { score: report.score, verdict: report.verdict, failed: report.checks.filter(c => !c.pass && !c.skipped).map(c => c.id) };
+      } catch (err) {
+        ctx.log.warn({ err: (err as Error).message }, 'grading failed');
+      }
+    }
     return { runId: ctx.runId, mode, date: ctx.today, digest, digestId, llmTier: written.tier, delivery, stats: ctx.stats };
   });
 }
@@ -203,7 +227,7 @@ async function promptRun(mode: Mode, lookbackWindow: string, opts: RunOptions) {
 async function rollupRun(mode: 'weekly' | 'monthly', lookbackWindow: string, opts: RunOptions): Promise<DigestRunResult> {
   const { config } = getConfig();
   const ctx = createRun({ config, mode, lookbackWindow, dryRun: !!opts.dryRun, trigger: opts.trigger, kind: 'rollup', now: opts.now });
-  const engine = track(ctx, TITLES[mode], opts.engine);
+  const engine = { deadline: Date.now() + env().RUN_DEADLINE_MS, ...track(ctx, TITLES[mode], opts.engine) };
   return guarded(ctx, async () => {
     ctx.progress?.('Reading the saved digests');
     const built = (mode === 'weekly' ? weeklyPrompt : monthlyPrompt)(ctx.now, config.schedule.timezone);

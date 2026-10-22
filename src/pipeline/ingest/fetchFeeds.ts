@@ -5,22 +5,39 @@ import pLimit from 'p-limit';
 import { env } from '../../env.js';
 import type { Logger } from '../../logger.js';
 import type { FeedResult, RawArticle } from '../types.js';
+import type { CachedFeed, FeedCache } from './feedCache.js';
 import type { FeedToFetch } from './feedList.js';
 
 const parser = new Parser({ timeout: 0, customFields: { item: [['dc:creator', 'dc:creator'], ['source', 'source', { keepArray: true }]] } });
 const UA = 'Mozilla/5.0 (compatible; NetRunner/1.0; +self-hosted news digest)';
 
-/** retryAfterSec: how long the server asked us to wait (Retry-After, or Reddit's x-ratelimit-reset). */
-export type FetchText = (url: string, timeoutMs: number) => Promise<{ status: number; text: string; retryAfterSec?: number }>;
+/**
+ * retryAfterSec: how long the server asked us to wait (Retry-After, or Reddit's x-ratelimit-reset).
+ * etag / lastModified: the validators for asking "changed since?" next run (`headers` carries them back).
+ */
+export interface FetchResponse { status: number; text: string; retryAfterSec?: number; etag?: string; lastModified?: string }
+export type FetchText = (url: string, timeoutMs: number, headers?: Record<string, string>) => Promise<FetchResponse>;
 
-const defaultFetchText: FetchText = async (url, timeoutMs) => {
+const defaultFetchText: FetchText = async (url, timeoutMs, headers = {}) => {
   const res = await fetch(url, {
     signal: AbortSignal.timeout(timeoutMs),
     redirect: 'follow',
-    headers: { 'User-Agent': UA, Accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml, */*' },
+    headers: { 'User-Agent': UA, Accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml, */*', ...headers },
   });
   const wait = Number(res.headers.get('retry-after') ?? res.headers.get('x-ratelimit-reset'));
-  return { status: res.status, text: await res.text(), ...(Number.isFinite(wait) && wait >= 0 ? { retryAfterSec: wait } : {}) };
+  const etag = res.headers.get('etag');
+  const lastModified = res.headers.get('last-modified');
+  return {
+    status: res.status, text: await res.text(),
+    ...(Number.isFinite(wait) && wait >= 0 ? { retryAfterSec: wait } : {}),
+    ...(etag ? { etag } : {}), ...(lastModified ? { lastModified } : {}),
+  };
+};
+
+/** The "changed since?" headers for a feed we have a saved answer for. */
+const conditional = (c: CachedFeed | undefined): Record<string, string> | undefined => {
+  if (!c || (!c.etag && !c.lastModified)) return undefined;
+  return { ...(c.etag ? { 'If-None-Match': c.etag } : {}), ...(c.lastModified ? { 'If-Modified-Since': c.lastModified } : {}) };
 };
 
 /** Longest we'll wait on a rate limit before retrying (Reddit's window is 60 s). */
@@ -33,16 +50,21 @@ class HttpError extends Error {
 export const isTransient = (status: number, url: string) =>
   status >= 500 || status === 429 || status === 419 || (status === 404 && /youtube\.com\/feeds\//.test(url));
 
-async function fetchOne(feed: FeedToFetch, fetchText: FetchText, timeoutMs: number, tries: number): Promise<RawArticle[]> {
+async function fetchOne(feed: FeedToFetch, fetchText: FetchText, timeoutMs: number, tries: number, cache?: FeedCache): Promise<{ items: RawArticle[]; unchanged: boolean }> {
   let lastErr: unknown;
   // YouTube's feed endpoint flips between 200 and 404 for the same channel, so it gets extra attempts.
   const maxTries = tries > 1 && /youtube\.com\/feeds\//.test(feed.url) ? Math.max(tries, 5) : tries;
+  const cached = cache?.get(feed.url);
   for (let attempt = 1; attempt <= maxTries; attempt++) {
     try {
-      const { status, text, retryAfterSec } = await fetchText(feed.url, timeoutMs);
-      if (status >= 400) throw new HttpError(status, retryAfterSec);
+      const res = await fetchText(feed.url, timeoutMs, conditional(cached));
+      const unchanged = res.status === 304 && !!cached;
+      if (res.status >= 400 || (res.status === 304 && !cached)) throw new HttpError(res.status, res.retryAfterSec);
+      const text = unchanged ? cached!.body : res.text;
       const parsed = await parser.parseString(text);
-      return (parsed.items || []).map(i => ({ ...(i as RawArticle), _feed: feed.name }));
+      if (unchanged) cache!.touch(feed.url);
+      else if (cache && (res.etag || res.lastModified)) cache.put(feed.url, { etag: res.etag, lastModified: res.lastModified, body: text });
+      return { items: (parsed.items || []).map(i => ({ ...(i as RawArticle), _feed: feed.name })), unchanged };
     } catch (e) {
       lastErr = e;
       // Don't retry client errors (404/403/410) — they won't fix themselves in a second. Exceptions:
@@ -61,7 +83,7 @@ async function fetchOne(feed: FeedToFetch, fetchText: FetchText, timeoutMs: numb
 export async function fetchFeeds(
   feeds: FeedToFetch[],
   log: Logger,
-  opts: { fetchText?: FetchText; timeoutMs?: number; concurrency?: number; tries?: number; onProgress?: (done: number, total: number) => void } = {},
+  opts: { fetchText?: FetchText; timeoutMs?: number; concurrency?: number; tries?: number; cache?: FeedCache; onProgress?: (done: number, total: number) => void } = {},
 ): Promise<{ articles: RawArticle[]; results: FeedResult[] }> {
   const e = env();
   const limit = pLimit(opts.concurrency ?? e.FEED_CONCURRENCY);
@@ -81,8 +103,13 @@ export async function fetchFeeds(
   let done = 0;
   const settled = await Promise.all(feeds.map(feed => perHost(feed.url)(() => limit(async () => {
     try {
-      const items = await fetchOne(feed, fetchText, timeoutMs, tries);
-      return { feed, items, result: { feed: feed.name, url: feed.url, status: items.length ? 'ok' : 'empty', itemCount: items.length } as FeedResult };
+      const { items, unchanged } = await fetchOne(feed, fetchText, timeoutMs, tries, opts.cache);
+      const newest = Math.max(...items.map(i => Date.parse(i.isoDate || i.pubDate || i.published || '')).filter(Number.isFinite));
+      const result: FeedResult = {
+        feed: feed.name, url: feed.url, status: items.length ? 'ok' : 'empty', itemCount: items.length,
+        ...(unchanged ? { unchanged } : {}), ...(Number.isFinite(newest) ? { newestAt: new Date(newest).toISOString() } : {}),
+      };
+      return { feed, items, result };
     } catch (err) {
       const code = err instanceof HttpError ? err.status : (err as Error).name === 'TimeoutError' ? 'timeout' : 'error';
       log.debug({ feed: feed.name, url: feed.url, code }, 'feed failed');

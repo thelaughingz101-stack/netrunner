@@ -1,7 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { deleteDigest, listDigests, saveDigest } from '../../digests.js';
+import { deleteDigest, listDigests, saveDigest, searchDigests } from '../../digests.js';
 import { resolveYoutube } from '../../sources/youtubeResolve.js';
+import { resolveBluesky } from '../../sources/blueskyResolve.js';
 
 const NewDigest = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
@@ -12,6 +13,9 @@ const NewDigest = z.object({
 export async function digestRoutes(app: FastifyInstance) {
   app.get('/digests', async () => ({ digests: listDigests() }));
 
+  // Output tab search across every saved digest (the list only holds the newest 300).
+  app.get<{ Querystring: { q?: string } }>('/digests/search', async req => ({ hits: searchDigests(String(req.query.q ?? '').slice(0, 200)) }));
+
   app.post('/digests', async req => {
     const d = NewDigest.parse(req.body);
     return { id: saveDigest({ ...d, source: 'upload' }) };
@@ -20,6 +24,13 @@ export async function digestRoutes(app: FastifyInstance) {
   app.delete<{ Params: { id: string } }>('/digests/:id', async (req, reply) => {
     const ok = deleteDigest(Number(req.params.id));
     return ok ? { ok } : reply.code(404).send({ error: 'not found' });
+  });
+
+  // Add your own → Bluesky: checks the account exists before it's saved.
+  app.post('/resolve-bluesky', async (req, reply) => {
+    const { query } = z.object({ query: z.string().max(300) }).parse(req.body);
+    const result = await resolveBluesky(query);
+    return 'error' in result ? reply.code(422).send(result) : result;
   });
 
   app.post('/resolve-youtube', async (req, reply) => {

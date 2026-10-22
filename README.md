@@ -67,16 +67,16 @@ You only need a key for the AI you actually use. Changes take effect immediately
 
 | Tab | What you set there |
 |---|---|
-| **Start** | Ready-made starting setups (the one matching your settings is marked *Current*), plus export/import of your settings. |
+| **Start** | Starting points: *Everything on*, *Official only* (government agencies, public bodies and nonprofits) and *Start fresh*. They set topics and sources; your schedule, delivery, AI and Format settings stay. The one matching your settings is marked *Current*. Also export/import of your settings. |
 | **Topics** | Which topics appear. The **Catch-all sections** card at the bottom switches the *Everything Else* and *Excluded list* sections on or off. |
-| **Sources** | Individual sites and channels per topic, with full names (e.g. *Centers for Disease Control and Prevention (CDC)*). *Skip filler* drops YouTube Shorts and promo clips. *Add your own* takes any RSS feed or YouTube channel. |
-| **Format** | Summary length (1 sentence, 2–3, or full), language, and section order. |
-| **AI Writer** | Autopilot or Free Copy-Paste, which AI to use first, backups if it fails, and your keys. |
+| **Sources** | *Feed health* at the top lists feeds that are failing or empty two runs in a row, or quiet for two weeks, with a button to switch each off. Below it, individual sites, channels and Bluesky accounts per topic, with full names (e.g. *Centers for Disease Control and Prevention (CDC)*). Search by name, or show *Official bodies only* (marked ✦). *Skip filler* drops YouTube Shorts and promo clips. *Add your own* takes any RSS feed, YouTube channel or Bluesky account (checked with Bluesky before it's added). |
+| **Format** | Summary length (1 sentence, 2–3, or full), digest size (Full, or Light: about half the stories per topic), language, and section order. |
+| **AI Writer** | Autopilot or Free Copy-Paste, which AI to use first, backups if it fails, your keys, and the *Grader* (grade each digest, on by default). |
 | **Schedule** | Turn automatic digests on or off, times, timezone, how far back to look, and weekly/monthly recaps. How far back to look also sets how much goes in: longer ranges take more stories per source and per topic (12 hours: 8 per source and 25 per topic, up to 1 month: 50 and 80), keeping the stories the most outlets covered, then the newest. |
 | **Delivery** | Discord, email, save to file, and *Open in NetRunner* (opens the app on each new scheduled digest). |
-| **Output** | Every digest NetRunner has made, ready to read. Click a topic's header to fold it away (*Collapse all* / *Expand all* do every topic); NetRunner remembers what you folded. |
+| **Output** | Every digest NetRunner has made, ready to read, with its grade (*Pass*, *Needs attention* or *Fail*, out of 100): click it to see every check and the lines it flagged, or *Grade this digest* for older ones. Search box: every saved digest that mentions a word, with the matching lines (highlighted in the digest). Click a topic's header to fold it away (*Collapse all* / *Expand all* do every topic); NetRunner remembers what you folded. |
 
-The bar at the bottom has **Run News Digest**, **Undo changes** and **Save**. Save lights up (and *Unsaved changes* shows) only when something on screen differs from your saved settings. While a digest runs, from the button or the schedule, hover **Running…** to see what it's doing (e.g. *Fetching sources (64 of 112)*, *Writing the digest with Gemini*).
+The bar at the bottom has **Run News Digest**, **Undo changes** and **Save**. Save lights up (and *Unsaved changes* shows) only when something on screen differs from your saved settings. Under the Run button, a rough forecast for the settings on screen (*≈ 420 stories · about 9 min*), from your last few runs. While a digest runs, from the button or the schedule, hover **Running…** to see what it's doing (e.g. *Fetching sources (64 of 112)*, *Writing the digest with Gemini*).
 
 ---
 
@@ -91,7 +91,7 @@ The bar at the bottom has **Run News Digest**, **Undo changes** and **Save**. Sa
 **Known feed issues (optional, nothing to fix for normal use):**
 - **Hacker News** sometimes answers "slow down" (HTTP 419). It's retried automatically and usually works on the next run.
 - **Space.com** occasionally returns an empty feed.
-- **X / Twitter** accounts are not fetched yet (shown as *Coming soon*).
+- **X / Twitter** isn't used: accounts that also post on Bluesky are read there (and you can add your own Bluesky accounts under *Add your own*).
 
 ---
 
@@ -128,7 +128,7 @@ On Windows, the secrets (`GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, `DISCORD_WEBHOOK
 | Ollama address | `OLLAMA_URL` (model: `OLLAMA_MODEL`) |
 | Discord webhook URL | `DISCORD_WEBHOOK_URL` |
 | Email sending account | `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`, `EMAIL_FROM`, `EMAIL_TO` |
-| (not in the app) | `PORT`, `HOST`, `ALLOWED_HOSTS`, `DATA_DIR`, `SCHEDULER`, `LOG_LEVEL`, timeouts, `LEGACY_CONFIG_PATH`, `LLM_ITEMS_PER_CALL` (more stories than this in one run, default 150: the digest is written one topic per AI call, 3 at a time, then stitched together) |
+| (not in the app) | `PORT`, `HOST`, `ALLOWED_HOSTS`, `DATA_DIR`, `SCHEDULER`, `LOG_LEVEL`, timeouts, `LEGACY_CONFIG_PATH`, `LLM_ITEMS_PER_CALL` (more stories than this in one run, default 150: the digest is written in a few evenly sized AI calls of whole topics, 3 at a time, then stitched together) |
 
 See `.env.example` for what each one does. `ALLOWED_HOSTS` matters only if you reach NetRunner by a hostname other than `localhost` or an IP address. Other names are refused, which blocks DNS-rebinding attacks.
 
@@ -168,15 +168,22 @@ A container has no TPM to lock keys with, so on Docker you can keep them out of 
 ```
 trigger (schedule | Run button | CLI)
   → config → mode + lookback
-  → fetch feeds (parallel, retried; Reddit in one combined request) → drop Shorts / promo
-  → tag sources → time window + per-source cap → dedupe → same-story clustering → topic toggles → per-topic cap
+  → fetch feeds (parallel, retried; Reddit in one combined request; "changed since?" so unchanged feeds
+    answer 304 and their saved copy is reused) → drop Shorts / promo
+  → tag sources → time window + per-source cap → dedupe → same-story clustering (an official body's item
+    leads the story) → topic toggles → per-topic cap → Google News links swapped for the publishers' own
   → [Autopilot] assign IDs N001… → prompt (+ ID rule) → Gemini → Claude → Ollama
-        (over LLM_ITEMS_PER_CALL stories: one call per topic, 3 at a time, stitched in section order)
+        (over LLM_ITEMS_PER_CALL stories: a few calls of whole topics, 3 at a time, stitched in section order;
+         no AI call starts after RUN_DEADLINE_MS, 100 min: topics not written by then are listed plainly)
         → an answer stuck repeating itself: broken lines dropped, asked once more, then the next AI
         → diff output IDs vs. the item list → re-run ONLY the missing items (≤2 rounds)
         → anything still missing is listed under 📋 Everything Else → strip tags → drop repeated bullets
   → [Copy-Paste] platform exporter → copy-paste prompt
+  → search results' Google redirect links swapped for the articles' own; linked stories with no outlet get one
   → save digest → story tracker → Discord / Email / File (minus hidden sections)
+  → grade it (read-only): code checks (switched-off topics, repeats, links, outlets, filtered clips, coverage…)
+    then one AI request judging four criteria separately (same story twice, wrong section, unattributed claims, filler), preferring
+    a different AI from the writer; the score and every flagged line are saved for the Output tab
 ```
 
 Every run writes a structured record: feeds fetched, empty and failed; items dropped at each stage; which AI answered and every attempt; coverage per round; and each delivery's status. Find it in `GET /api/runs`, `GET /api/runs/<id>`, and `data/logs/netrunner.log` (JSON lines, one `runId` per run).

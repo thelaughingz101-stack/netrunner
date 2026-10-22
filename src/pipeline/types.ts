@@ -37,6 +37,8 @@ export interface Item {
   summary: string;
   clusterSize?: number;
   clusterLinks?: string[];
+  /** From a government agency, public body or nonprofit institution (catalog OFFICIAL_SOURCES). */
+  official?: true;
   /** Assigned before the LLM sees the item (omission protection). */
   id?: string;
 }
@@ -46,6 +48,10 @@ export interface FeedResult {
   url: string;
   status: 'ok' | 'empty' | 'error';
   itemCount: number;
+  /** The site answered "not changed" (304) and its saved answer was reused. */
+  unchanged?: boolean;
+  /** The newest story date the feed offered (ISO), for Feed health. */
+  newestAt?: string;
   error?: string;
   code?: number | string;
 }

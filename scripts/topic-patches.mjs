@@ -9,7 +9,8 @@ function searchTasks(nightly) {
   const on = t => enabledTopics[t] !== false;
   const when = nightly ? 'today' : 'overnight';
   const tasks = [];
-  if (on('Notable Trends')) tasks.push('Top 10 trending X/Twitter US topics right now (search for current results, do not guess)');
+  // n8n asked for trending X/Twitter topics; X is gone from NetRunner (Zion, 2026-10-22), so: what's trending, anywhere.
+  if (on('Notable Trends')) tasks.push('Top 10 trending US topics right now (Google Trends, Reddit, Bluesky; search for current results, do not guess)');
   if (on('US Politics')) tasks.push(nightly ? 'Breaking US political news since this morning (verified sources only)' : 'Overnight US political news (verified sources only)');
   if (on('Business & Finance')) tasks.push(nightly ? 'How S&P 500, Nasdaq, Dow closed today (use real closing numbers)' : 'Premarket conditions today (use real numbers from a live search)');
   const announced = [];
@@ -20,6 +21,8 @@ function searchTasks(nightly) {
   if (on('Comics')) tasks.push((nightly ? 'New' : 'Upcoming') + ' comic book releases this Wednesday (NCBD) — search each publisher separately: DC Comics, Marvel Comics, Image Comics, Boom Studios, Dark Horse Comics, Dynamite Entertainment, IDW Publishing, Indie publishers. Only list issues you can verify from ComicList, AIPT, CBR, or publisher websites.');
   if (on('Science & Space')) tasks.push('Science and space discoveries or announcements ' + when + ' (NASA, Phys.org, Space.com, ESA)');
   if (on('Health')) tasks.push('Public health news ' + when + ' (official WHO, CDC, FDA, NIH and ECDC announcements only)');
+  if (on('Music')) tasks.push('Major music news ' + when + ' (album and tour announcements, charts; Billboard, Rolling Stone, Pitchfork or official artist and label sources only)');
+  if (on('Weather & Disasters')) tasks.push('Severe weather and natural disasters ' + when + ' (official National Weather Service, National Hurricane Center, USGS and FEMA announcements only)');
   if (on('Anime')) tasks.push('Anime news ' + when + ' (Anime News Network, Crunchyroll, Funimation, official studio sources only)');
   if (on('Animation')) tasks.push('Western animation news ' + when + ' (Adult Swim, Cartoon Network, Netflix Animation, official sources only)');
   if (on('Security')) tasks.push('Cybersecurity incidents ' + when + ' at state/federal level OR affecting a major company mentioned in this digest (Krebs on Security, TorrentFreak, verified outlets only)');
@@ -87,6 +90,36 @@ export const PAYLOAD_TOPIC_PATCHES = [
     why: 'Health topic: its section header.',
     from: "  'Science & Space':      '🔭 Science & Space',\n",
     to: "  'Science & Space':      '🔭 Science & Space',\n  'Health':               '🩺 Health',\n",
+  },
+  {
+    id: 'weather-order-payload',
+    why: 'Weather & Disasters topic (added in NetRunner, not in n8n): its place in the default section order, after Health.',
+    from: "'Animation','Science & Space','Health',\n",
+    to: "'Animation','Science & Space','Health','Weather & Disasters',\n",
+  },
+  {
+    id: 'weather-header-payload',
+    why: 'Weather & Disasters topic: its section header.',
+    from: "  'Health':               '🩺 Health',\n",
+    to: "  'Health':               '🩺 Health',\n  'Weather & Disasters':  '🌪️ Weather & Disasters',\n",
+  },
+  {
+    id: 'music-order-payload',
+    why: 'Music topic (added in NetRunner, not in n8n; Billboard sat in Business & Finance): its place in the default section order, after Animation.',
+    from: "'Animation','Science & Space','Health','Weather & Disasters',\n",
+    to: "'Animation','Music','Science & Space','Health','Weather & Disasters',\n",
+  },
+  {
+    id: 'music-header-payload',
+    why: 'Music topic: its section header.',
+    from: "  'Animation':            '🎨 Animation',\n",
+    to: "  'Animation':            '🎨 Animation',\n  'Music':                '🎵 Music',\n",
+  },
+  {
+    id: 'search-format-payload',
+    why: 'Search results came back as bare sentences with no link or outlet (6 US Politics bullets on 2026-10-19) and Comics release lines named no source, breaking "every item must have a named source".',
+    from: "never for a topic that isn't listed there (the user turned it off).",
+    to: "never for a topic that isn't listed there (the user turned it off).\n- Search-sourced items use the same bullet format as feed items: - [**Headline**](the article's own URL) — summary. *(Outlet)*. The outlet is the publisher you found it on (AP News, Reuters, Politico…), never \"Google Search\". Market numbers and trending topics too: name where they came from, e.g. *(MarketWatch)*, *(Google Trends)*. Comics release lines may skip the link but end with where you verified them, e.g. *(ComicList)*. A search result you can't name an outlet for is left out.",
   },
   {
     id: 'topics-comics-rules-payload',
@@ -163,6 +196,32 @@ export function exporterTopicPatches(name) {
       from: "  'Science & Space': `- 🔭 Science & Space — NASA, ESA, Phys.org, Space.com, or peer-reviewed.`,\n",
       to: "  'Science & Space': `- 🔭 Science & Space — NASA, ESA, Phys.org, Space.com, or peer-reviewed.`,\n"
         + "  'Health': `- 🩺 Health — official public-health bodies (WHO, CDC, FDA, NIH, ECDC) or peer-reviewed research: outbreaks, recalls, safety alerts, guidance. Report what the agency said; no medical advice.`,\n",
+    },
+    {
+      id: 'weather-emoji',
+      why: 'Weather & Disasters topic (added in NetRunner, not in n8n): its emoji, and its place in the default order after Health.',
+      from: "'Health':'🩺',\n",
+      to: "'Health':'🩺','Weather & Disasters':'🌪️',\n",
+    },
+    {
+      id: 'weather-rule',
+      why: 'Weather & Disasters topic: its section rule.',
+      from: "Report what the agency said; no medical advice.`,\n",
+      to: "Report what the agency said; no medical advice.`,\n"
+        + "  'Weather & Disasters': `- 🌪️ Weather & Disasters — official warnings and reports (National Weather Service, National Hurricane Center, USGS, FEMA): severe weather, hurricanes, earthquakes, disaster declarations. Say where and when; report what the agency said, no speculation.`,\n",
+    },
+    {
+      id: 'music-emoji',
+      why: 'Music topic (added in NetRunner, not in n8n): its emoji, and its place in the default order after Animation.',
+      from: "'Anime':'🎌','Animation':'🎨',",
+      to: "'Anime':'🎌','Animation':'🎨','Music':'🎵',",
+    },
+    {
+      id: 'music-rule',
+      why: 'Music topic: its section rule.',
+      from: "  'Animation': `- 🎨 Animation — official greenlight / trailer / premiere (Adult Swim, Cartoon Network, Netflix Animation).`,\n",
+      to: "  'Animation': `- 🎨 Animation — official greenlight / trailer / premiere (Adult Swim, Cartoon Network, Netflix Animation).`,\n"
+        + "  'Music': `- 🎵 Music — releases, tours, charts and industry news from music outlets (Billboard, Rolling Stone, Pitchfork) or official artist and label announcements. Label rumors as rumors.`,\n",
     },
     {
       id: 'topics-headers-bf',

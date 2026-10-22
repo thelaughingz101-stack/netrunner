@@ -93,4 +93,33 @@ export const MIGRATIONS: string[] = [
   ALTER TABLE run_lock ADD COLUMN title TEXT;
   ALTER TABLE run_lock ADD COLUMN stage TEXT;
   `,
+  /* 4 */ `
+  -- Each feed's last answer, so the next run can ask "changed since?" (ETag / Last-Modified) and reuse it on 304.
+  CREATE TABLE feed_cache (
+    url           TEXT PRIMARY KEY,
+    etag          TEXT,
+    last_modified TEXT,
+    body          TEXT NOT NULL,
+    used_at       TEXT NOT NULL
+  );
+  -- Google News article id → the publisher's real link (resolved once, reused by later runs).
+  CREATE TABLE gnews_links (
+    id          TEXT PRIMARY KEY,
+    url         TEXT NOT NULL,
+    resolved_at TEXT NOT NULL
+  );
+  `,
+  /* 5 */ `
+  -- The newest story date a feed offered on each run, so Feed health can tell a quiet feed from a busy one.
+  ALTER TABLE feed_results ADD COLUMN newest_at TEXT;
+  -- The grader's report on a digest (read-only: it never changes the digest). One per digest, the latest.
+  CREATE TABLE digest_grades (
+    digest_id  INTEGER PRIMARY KEY REFERENCES digests(id) ON DELETE CASCADE,
+    run_id     TEXT,
+    score      INTEGER NOT NULL,
+    verdict    TEXT NOT NULL,             -- pass | attention | fail
+    json       TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  );
+  `,
 ];

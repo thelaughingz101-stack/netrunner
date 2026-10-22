@@ -7,6 +7,7 @@ import { ZodError } from 'zod';
 import { env } from '../env.js';
 import { configRoutes } from './routes/config.js';
 import { digestRoutes } from './routes/digests.js';
+import { gradeRoutes } from './routes/grades.js';
 import { keyRoutes } from './routes/keys.js';
 
 const publicDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../public');
@@ -55,6 +56,6 @@ export async function buildApp(extraRoutes: RouteModule[] = []): Promise<Fastify
   });
 
   await app.register(fastifyStatic, { root: publicDir, index: ['netrunner-config.html'] });
-  await app.register(async a => { await configRoutes(a); await digestRoutes(a); await keyRoutes(a); for (const r of extraRoutes) await r(a); }, { prefix: '/api' });
+  await app.register(async a => { await configRoutes(a); await digestRoutes(a); await gradeRoutes(a); await keyRoutes(a); for (const r of extraRoutes) await r(a); }, { prefix: '/api' });
   return app;
 }

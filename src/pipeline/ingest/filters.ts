@@ -68,6 +68,15 @@ export const titleOverlap = (a: string, b: string) => {
  */
 const officialFirst = (group: Item[]) => [...group.filter(g => g.official), ...group.filter(g => !g.official)];
 
+const site = (url: string) => url.match(/^https?:\/\/(?:www\.)?([^/?#]+)/i)?.[1]?.toLowerCase() ?? '';
+/**
+ * Two pages on one site from the same source are two stories: an outlet doesn't cover a story twice in one feed
+ * (exact repeats are already gone). Short look-alike titles merged otherwise: Zion's game feed had "Until Dawn
+ * PC Port" and "Crystal Defenders PC Port" as one story, and 31 of them shrank to 22 (2026-10-26). An outlet's
+ * article and its own YouTube video of the same story (two sites) still merge, and so do Reddit posts (different people posting the same news).
+ */
+const samePublisherPages = (a: Item, b: Item) => a.source === b.source && !!a.link && site(a.link) === site(b.link) && site(a.link) !== 'reddit.com';
+
 /** Groups same-category items whose titles overlap ≥ 0.5 (greedy; the first item, or an official one, is primary). */
 export function clusterSameStory(items: Item[], threshold = 0.5): { items: Item[]; merged: number } {
   const used = new Set<number>();
@@ -79,6 +88,7 @@ export function clusterSameStory(items: Item[], threshold = 0.5): { items: Item[
     for (let j = i + 1; j < items.length; j++) {
       if (used.has(j)) continue;
       if (items[i].category !== items[j].category) continue; // only cluster within same category
+      if (samePublisherPages(items[i], items[j])) continue;
       if (titleOverlap(items[i].title, items[j].title) >= threshold) { cluster.push(j); used.add(j); }
     }
     clusters.push(cluster);

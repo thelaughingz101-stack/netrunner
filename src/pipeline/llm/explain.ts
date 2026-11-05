@@ -40,7 +40,14 @@ export function whyFailed(a: AttemptLog): Why {
     return { what: 'took too long to answer', fix: 'Run it again, or turn off some topics or sources so the digest is smaller.' };
   }
   if (a.tier === 'ollama' && has(/ECONNREFUSED/)) {
-    return { what: "isn't running on this PC", fix: "Start Ollama, or ignore this if you don't use it." };
+    return { what: "isn't running on this PC", fix: "Start it in AI Writer → Local AI, or ignore this if you don't use it." };
+  }
+  if (a.tier === 'ollama' && has(/isn't downloaded/)) {
+    const model = text.match(/model "([^"]+)"/)?.[1];
+    return { what: `doesn't have ${model ?? 'the chosen model'} downloaded`, fix: 'Pick or download a model in AI Writer → Local AI.' };
+  }
+  if (a.tier === 'ollama' && has(/too long for/)) {
+    return { what: "can't read a request this long", fix: 'A local model reads about 8,000 tokens at a time: weekly and monthly recaps need Gemini or Claude.' };
   }
   if (has(/network error|fetch failed|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|socket|connection error/i)) {
     return { what: "couldn't be reached", fix: 'Check your internet connection, then run it again.' };

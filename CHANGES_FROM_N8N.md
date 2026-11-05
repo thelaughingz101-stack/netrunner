@@ -37,7 +37,13 @@ The Autopilot prompt (Build LLM Payload) and all 5 Manual-mode exporters run **b
 | Claude tier | `claude-haiku-4-5-20251001`, `max_tokens` 8192, raw HTTP | `claude-haiku-5-5` (current Haiku), `max_tokens` 32000, streaming, official SDK, `pause_turn` resumed | Current model; 8192 truncated long digests. Override with `CLAUDE_MODEL` |
 | Claude text join | text blocks joined with `\n` | joined with `''` | Web-search citations split sentences across blocks, so `\n` broke them mid-line |
 | Gemini text join | answer parts joined with `\n` | joined with `''` | Parts are cut anywhere: links broke mid-address (`](https\n://www.reddit…`, 2026-10-22), so those stories lost their links |
-| LLM routing | canvas hardwired Gemini → Claude, Ollama disabled | `config.llm.primary` + `fallbackChain` honored, Ollama wired (RSS-only prompt, `num_ctx` 8192) | Phase 3.3 |
+| LLM routing | canvas hardwired Gemini → Claude, Ollama disabled | `config.llm.primary` + `fallbackChain` honored, Ollama wired | Phase 3.3 |
+| Ollama digests | "Ollama RSS-Only Mode": the whole feed in one prompt listing five sections (Gaming, Tech, AI, TV, Comics) | NetRunner builds the digest in code and the model only shortens each story's text, one request per story, one request at a time (`src/pipeline/llm/local.ts`); answers with an invented number or too many words the story doesn't have are replaced by its opening sentence. Same wherever Ollama is in the chain, and for missed-story recovery. The grader never uses it | A 1.7B model reads 8,192 tokens and copied headlines when asked for several summaries at once (Zion, 2026-10-22) |
+| Custom feeds in the prompt | "Report items same as any built-in category"; the copy-paste list didn't say which stories were the user's; "has custom feeds" counted X lists | Prompt rule: Custom Feeds stories always go under 📡 Custom Feeds, never another section or EXCLUDED as filler; the copy-paste list marks them `[custom feed]`; Bluesky accounts count | Gemini excluded all 31 stories from Zion's own feed as filler; the Claude chatbot spread them over Gaming (2026-10-26) |
+| Same-story clustering | any two same-topic headlines sharing half their keywords merged | two different pages from one outlet's own site never merge (Reddit posts still do) | "Until Dawn PC Port" and "Crystal Defenders PC Port" became one story |
+| Summary length | a request in the prompt only | also enforced after writing: longer summaries are cut at a sentence end | With "One sentence", 16 of 203 summaries had two |
+| Copy-paste prompt | only in Copy-Paste mode, and refused while any run was going | in Autopilot too; it takes no run lock (it only reads feeds) | Generate Prompt failed with no reason during an Autopilot run |
+| Local AI setup | edit `OLLAMA_MODEL` in `.env`, run `ollama pull` | AI Writer → Local AI: Ollama status and **Start Ollama**, installed models to pick from, downloads with progress, a timed test; the forecast uses the local pace | So someone who doesn't know Ollama can use it |
 | Gemini key | `?key=` query param | `x-goog-api-key` header | Same auth; keeps the key out of URLs |
 | Truncated output (`MAX_TOKENS`) | shipped with a ⚠️ banner | tries the next tier first; ships with the same banner only if no tier finishes | Fewer broken digests |
 | All tiers fail | shipped "⚠️ No digest available…" to every target | run marked `error`, nothing delivered, attempts logged | Don't spam Discord or email with an error string |
@@ -93,7 +99,7 @@ The Autopilot prompt (Build LLM Payload) and all 5 Manual-mode exporters run **b
 | Output tab | browser localStorage | server `digests` table (history imported from `.n8n-files`) | Survives cache clears; includes scheduled runs |
 | UI runtime | unpinned React/Babel from unpkg | pinned (React 18.3.1, Babel 7.29.10) and served locally | Self-hosted |
 | Run now → Autopilot | webhook had no respond node on that branch, so the UI likely never got the digest | `POST /api/run` returns `{digest, mode, date, digestId}` | Bug |
-| Ollama in UI | "Coming Soon", unselectable | selectable | Now wired |
+| Ollama in UI | "Coming Soon", unselectable | selectable, with its own Local AI card | Now wired |
 | Rollups tab | inert (toggles disabled) | working toggles | Now built |
 | Scheduling on/off | always on | Schedule → Automatic digests switch | Off removes every Task Scheduler job, recaps included |
 | Shorts / promo items | all passed to the model | Sources → Skip filler: Shorts and promo clips (clips, featurettes, launch/accolades trailers, "now playing", promo codes), both on by default | Dropped before the per-source cap; counts in run stats (`droppedShorts`, `droppedPromotional`) |

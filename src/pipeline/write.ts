@@ -3,10 +3,11 @@
 import pLimit from 'p-limit';
 import type { Config } from '../config/schema.js';
 import { env } from '../env.js';
-import { ID_RULE, stripSections, withIdRule } from './coverage/coverage.js';
+import { stripSections, withIdRule } from './coverage/coverage.js';
 import { ensureCoverage, recordItems, type CoverageOutcome, type CoverageStats } from './coverage/index.js';
 import { AllTiersFailedError, generate, type EngineOptions } from './llm/engine.js';
 import { attemptStage } from './llm/explain.js';
+import type { LocalStats } from './llm/local.js';
 import type { AttemptLog, Tier } from './llm/types.js';
 import { buildLlmPayload } from './prompt/index.js';
 import { callConfig, failureNote, morningSlice, plainSections, planCalls, stitch, type CallPlan } from './split.js';
@@ -21,18 +22,19 @@ export interface Written { digest: string; placements: CoverageOutcome['placemen
 interface CallResult {
   digest: string;
   placements: CoverageOutcome['placements'];
-  llm: { tier: Tier; model: string; finishReason: string | null; truncated: boolean; attempts: AttemptLog[] };
+  llm: { tier: Tier; model: string; finishReason: string | null; truncated: boolean; attempts: AttemptLog[]; local?: LocalStats };
   coverage?: CoverageStats;
 }
 
 /** A topic call either wrote its part or failed: every AI tier failed, or something else broke. */
 type Outcome = { plan: CallPlan; r: CallResult } | { plan: CallPlan; err: Error };
 
-/** One AI call over these items, then the coverage check (recovery rounds) on its answer. */
-async function writeOne(ctx: RunContext, config: Config, input: WriteInput, engine: EngineOptions): Promise<CallResult> {
+/** One AI call over these items, then the coverage check (recovery rounds) on its answer. `progress` shows a
+ *  local model's story count (the online AIs write in one go). */
+async function writeOne(ctx: RunContext, config: Config, input: WriteInput, engine: EngineOptions, progress?: (stage: string) => void): Promise<CallResult> {
   const prompt = withIdRule(buildLlmPayload({ mode: input.mode, items: input.items, morningDigest: input.morningDigest }, config, input.developing));
-  const first = await generate({ kind: 'digest', prompt, idRule: ID_RULE }, config, ctx.log, engine);
-  const llm = { tier: first.tier, model: first.model, finishReason: first.finishReason, truncated: first.truncated, attempts: first.attempts };
+  const first = await generate({ kind: 'digest', prompt, stories: { items: input.items, config, onProgress: progress } }, config, ctx.log, engine);
+  const llm = { tier: first.tier, model: first.model, finishReason: first.finishReason, truncated: first.truncated, attempts: first.attempts, ...(first.local ? { local: first.local } : {}) };
   if (!input.items.length) return { digest: first.text, placements: new Map(), llm };
   const cov = await ensureCoverage(ctx, input.items, prompt, first, engine);
   return { digest: cov.digest, placements: cov.placements, llm, coverage: cov.stats };
@@ -41,7 +43,7 @@ async function writeOne(ctx: RunContext, config: Config, input: WriteInput, engi
 export async function writeDigest(ctx: RunContext, input: WriteInput, engine: EngineOptions): Promise<Written> {
   const plans = planCalls(input.items, ctx.config, env().LLM_ITEMS_PER_CALL);
   if (!plans) {
-    const one = await writeOne(ctx, ctx.config, input, engine);
+    const one = await writeOne(ctx, ctx.config, input, engine, ctx.progress);
     ctx.stats.llm = one.llm;
     return { digest: one.digest, placements: one.placements, tier: one.llm.tier };
   }
@@ -66,7 +68,7 @@ export async function writeDigest(ctx: RunContext, input: WriteInput, engine: En
       // Developing stories cut across topics: the first call only, so they're reported once.
       const r = await writeOne(ctx, callConfig(ctx.config, plan), {
         mode: input.mode, items: plan.items, morningDigest: slices[i], developing: i === 0 ? input.developing : [],
-      }, callEngine);
+      }, callEngine, stage => progress(` · ${label(plan)}: ${stage}`));
       return { plan, r };
     } catch (e) {
       // Any failure stays with its topic: rejecting the whole run here left the other calls running unseen.
@@ -99,8 +101,10 @@ export async function writeDigest(ctx: RunContext, input: WriteInput, engine: En
   if (failed.length) digest = `${failureNote(failedTopics, failed[0].err.message, failedSearches.length)}\n\n${digest}`;
 
   const first = ok[0].r.llm;
+  const local = sumLocal(ok.map(x => x.r.llm.local));
   ctx.stats.llm = {
     ...first,
+    ...(local ? { local } : {}),
     truncated: ok.some(x => x.r.llm.truncated),
     attempts: results.flatMap(x => ('r' in x ? x.r.llm.attempts : x.err instanceof AllTiersFailedError ? x.err.attempts : [])),
     calls: total,
@@ -119,4 +123,13 @@ export async function writeDigest(ctx: RunContext, input: WriteInput, engine: En
     finalAccounted: sum('finalAccounted') + failedItems.length,
   };
   return { digest, placements, tier: first.tier };
+}
+
+/** The local model's work across the calls it wrote (none: undefined). */
+function sumLocal(list: (LocalStats | undefined)[]): LocalStats | undefined {
+  const all = list.filter((l): l is LocalStats => !!l);
+  if (!all.length) return undefined;
+  const n = (k: 'stories' | 'summarized' | 'feedText' | 'headlineOnly' | 'fallback' | 'modelMs') => all.reduce((a, l) => a + l[k], 0);
+  const stopped = all.find(l => l.stopped)?.stopped;
+  return { model: all[0].model, stories: n('stories'), summarized: n('summarized'), feedText: n('feedText'), headlineOnly: n('headlineOnly'), fallback: n('fallback'), modelMs: n('modelMs'), ...(stopped ? { stopped } : {}) };
 }

@@ -7,7 +7,7 @@ import { buildFeedList } from './feedList.js';
 import { dbFeedCache } from './feedCache.js';
 import { deadFeedReport, fetchFeeds, type FetchText } from './fetchFeeds.js';
 import { resolveGoogleNewsLinks, type ResolveId } from './googleNews.js';
-import { normalize } from './normalize.js';
+import { normalize, textLimit } from './normalize.js';
 import { clusterSameStory, contentFilter, dedupeAndSort, mergeAcrossCategories, timeWindow, topicFilter } from './filters.js';
 import { capPerSource, limitPerTopic, perSourceCap, perTopicLimit } from './limits.js';
 
@@ -40,7 +40,7 @@ export async function ingest(ctx: RunContext, opts: { fetchText?: FetchText; tri
   const empty = results.filter(r => r.status === 'empty');
 
   const cf = contentFilter(articles, config);
-  const norm = normalize(cf.articles, ctx.mode);
+  const norm = normalize(cf.articles, ctx.mode, textLimit(ctx.config.format.summaryLength));
   const win = timeWindow(norm.items, ctx.lookbackWindow, ctx.now.getTime());
   const dd = dedupeAndSort(win.items);
   // After the window and newest-first: each source keeps its newest stories inside the range (n8n capped

@@ -184,11 +184,15 @@ export function parseVerdicts(text: string): Record<string, Verdict | null> {
   return out;
 }
 
-/** The AIs to grade with: any but the one that wrote the digest first (a second opinion), that one last. */
-export function graderConfig(config: Config, writer?: Tier): Config {
-  const order = tierOrder(config);
+/**
+ * The AIs to grade with: any but the one that wrote the digest first (a second opinion), that one last. Never a
+ * local model: the grading request is longer than a small one can read, and it has to answer in exact JSON.
+ * null when only a local model is set up (the code checks still run).
+ */
+export function graderConfig(config: Config, writer?: Tier): Config | null {
+  const order = tierOrder(config).filter(t => t !== 'ollama');
   const tiers = writer ? [...order.filter(t => t !== writer), ...order.filter(t => t === writer)] : order;
-  return { ...config, llm: { ...config.llm, primary: tiers[0], fallbackChain: tiers.slice(1) } };
+  return tiers.length ? { ...config, llm: { ...config.llm, primary: tiers[0], fallbackChain: tiers.slice(1) } } : null;
 }
 
 /** All four criteria in one request; each comes back with its own verdict and is scored on its own. */
@@ -198,10 +202,12 @@ export async function runJudges(parsed: ParsedDigest, config: Config, log: Logge
   const skip = (summary: string, skipped: string) =>
     CRITERIA.map((c): CheckResult => ({ id: c.id, name: c.name, grader: 'ai', weight: c.weight, score: 1, pass: true, evidence: [], summary, skipped }));
   if (!judged.length) return { checks: skip('Nothing to judge', 'No bullets'), model: null };
+  const graders = graderConfig(config, writer);
+  if (!graders) return { checks: skip("Not graded: these checks need Gemini or Claude (a local model can't grade)", 'No online AI'), model: null };
   const note = all.length > judged.length ? ` — the first ${judged.length} of ${all.length}` : '';
   try {
     const req: LLMRequest = { kind: 'grade', prompt: judgePrompt(judged, note) };
-    const res = await generate(req, graderConfig(config, writer), log, { ...engine, tries: Math.min(engine.tries ?? 3, 3) });
+    const res = await generate(req, graders, log, { ...engine, tries: Math.min(engine.tries ?? 3, 3) });
     const verdicts = parseVerdicts(res.text);
     const checks = CRITERIA.map((c): CheckResult => {
       const v = verdicts[c.id];

@@ -16,6 +16,7 @@ export const EDITABLE = {
   GEMINI_API_KEY: { secret: true },
   ANTHROPIC_API_KEY: { secret: true },
   OLLAMA_URL: { secret: false },
+  OLLAMA_MODEL: { secret: false },
   DISCORD_WEBHOOK_URL: { secret: true },
   SMTP_HOST: { secret: false },
   SMTP_PORT: { secret: false },

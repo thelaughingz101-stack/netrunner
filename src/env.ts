@@ -26,7 +26,7 @@ const EnvSchema = z.object({
   ANTHROPIC_API_KEY: optional,
   CLAUDE_MODEL: z.string().default('claude-haiku-5-5'),
   OLLAMA_URL: z.string().default('http://localhost:11434'),
-  OLLAMA_MODEL: z.string().default('llama3:latest'),
+  OLLAMA_MODEL: z.string().default('smollm2:1.7b-instruct-q4_K_M'),
 
   // Digest calls get max(LLM_TIMEOUT_MS, sources × LLM_TIMEOUT_PER_SOURCE_MS), capped at LLM_TIMEOUT_MAX_MS.
   LLM_TIMEOUT_MS: int(600_000),

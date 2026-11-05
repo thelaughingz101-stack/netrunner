@@ -3,7 +3,7 @@ import { generate, type EngineOptions } from '../llm/engine.js';
 import type { LLMResult } from '../llm/types.js';
 import type { DigestPrompt } from '../prompt/index.js';
 import type { Item, RunContext } from '../types.js';
-import { diffCoverage, forcePlace, ID_RULE, mergeRecovery, normalizeTags, recoveryPrompt, removeUntaggedMentions } from './coverage.js';
+import { diffCoverage, forcePlace, mergeRecovery, normalizeTags, recoveryPrompt, removeUntaggedMentions } from './coverage.js';
 
 export const MAX_RECOVERY_ROUNDS = 2;
 
@@ -50,7 +50,8 @@ export async function ensureCoverage(
   for (let round = 1; round <= MAX_RECOVERY_ROUNDS && missing.length > 0; round++) {
     const before = missing.length;
     try {
-      const res = await generate({ kind: 'recovery', prompt: recoveryPrompt(prompt, missing.map(id => byId.get(id)!)), idRule: ID_RULE }, ctx.config, ctx.log, engineOpts);
+      const missed = missing.map(id => byId.get(id)!);
+      const res = await generate({ kind: 'recovery', prompt: recoveryPrompt(prompt, missed), stories: { items: missed, config: ctx.config } }, ctx.config, ctx.log, engineOpts);
       extraTiers.push(res.tier);
       const text = normalizeTags(res.text);
       const got = diffCoverage(text, missing);

@@ -3,7 +3,10 @@
 import { BUILTIN_FEEDS, toggleKey } from '../catalog/index.js';
 import type { Config } from '../config/schema.js';
 import { db } from '../db/db.js';
+import { savedSpeed } from '../localAi.js';
+import { LOOKBACK_HOURS_MAP } from './ingest/filters.js';
 import { perSourceCap, perTopicLimit } from './ingest/limits.js';
+import type { LocalStats } from './llm/local.js';
 
 export interface Estimate {
   stories: number;
@@ -16,6 +19,11 @@ export interface Estimate {
 const HISTORY = 10;
 /** A source that brought nothing in those runs (new, or quiet) counts as this share of a typical source. */
 const UNSEEN_WEIGHT = 0.5;
+/** A local model, before a run or the Local AI test has timed it: seconds per story it shortens (smollm2:1.7b on
+ *  a laptop CPU took about 3), the share of stories it's asked about, and the minutes fetching the feeds takes. */
+const LOCAL_SECONDS = 4;
+const LOCAL_SHARE = 0.4;
+const FETCH_MINUTES = 1.5;
 
 type RunRow = { id: string; lookback: string | null; stats_json: string | null };
 
@@ -54,15 +62,18 @@ export function estimateRun(config: Config): Estimate | null {
     }
     const seen = [...counts.values()].flatMap(m => [...m.values()]);
     if (!seen.length) continue;
-    const typical = seen.reduce((a, b) => a + b, 0) / seen.length;
+    // A run over another range: a source brings stories in proportion to the hours covered, up to the cap.
+    // Without this the forecast ignored the range: a week counted like the 12 hours the last runs covered.
+    const scale = (LOOKBACK_HOURS_MAP[lookback] ?? 12) / (LOOKBACK_HOURS_MAP[r.lookback ?? lookback] ?? LOOKBACK_HOURS_MAP[lookback] ?? 12);
+    const typical = seen.reduce((a, b) => a + b, 0) / seen.length * scale;
 
     let total = 0;
     for (const topic of new Set([...keysByTopic.keys(), ...counts.keys()])) {
       if (!topicOn(topic)) continue;
       const got = counts.get(topic) ?? new Map<string, number>();
-      if (topic === 'Custom Feeds') { total += [...got.values()].reduce((a, b) => a + b, 0); continue; } // never capped
+      if (topic === 'Custom Feeds') { total += [...got.values()].reduce((a, b) => a + b, 0) * scale; continue; } // never capped
       let n = 0;
-      for (const [src, c] of got) if (sourceOn(src)) n += Math.min(c, sourceCap);
+      for (const [src, c] of got) if (sourceOn(src)) n += Math.min(c * scale, sourceCap);
       for (const k of keysByTopic.get(topic) ?? []) if (sourceOn(k) && !got.has(k)) n += Math.min(typical, sourceCap) * UNSEEN_WEIGHT;
       total += Math.min(n, topicCap);
     }
@@ -74,8 +85,23 @@ export function estimateRun(config: Config): Estimate | null {
   }
   if (!perRun.length) return null;
 
-  const mid = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
   const stories = Math.round(mid(perRun));
+  // The online AIs' pace says nothing about a model on this computer.
+  if (config.llm.primary === 'ollama') return { stories, minutes: localMinutes(stories, all), runs: perRun.length };
   const minutes = minutesPerStory.length ? Math.max(1, Math.round(stories * mid(minutesPerStory))) : 0;
   return { stories, minutes, runs: perRun.length };
+}
+
+const mid = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
+
+/** Minutes for a local model to write this many stories: its pace in past runs, else the Local AI test's. */
+function localMinutes(stories: number, runs: RunRow[]): number {
+  const paces = runs.flatMap(r => {
+    const local: LocalStats | undefined = r.stats_json ? JSON.parse(r.stats_json)?.llm?.local : undefined;
+    const asked = local ? local.summarized + local.fallback : 0;
+    return local && asked && local.stories ? [{ seconds: local.modelMs / 1000 / asked, share: asked / local.stories }] : [];
+  });
+  const seconds = paces.length ? mid(paces.map(p => p.seconds)) : savedSpeed()?.secondsPerStory ?? LOCAL_SECONDS;
+  const share = paces.length ? mid(paces.map(p => p.share)) : LOCAL_SHARE;
+  return Math.max(1, Math.round(FETCH_MINUTES + stories * share * seconds / 60));
 }

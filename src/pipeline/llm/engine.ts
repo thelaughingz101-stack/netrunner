@@ -108,59 +108,66 @@ export async function generate(req: LLMRequest, config: Config, log: Logger, opt
     }
     let loopedOnce = false;
     for (let attempt = 1; attempt <= tries; attempt++) {
-      if (left() < (opts.minAttemptMs ?? MIN_ATTEMPT_MS)) {
-        attempts.push({ tier, attempt, ok: false, ms: 0, error: OUT_OF_TIME });
-        log.warn({ tier, attempt, kind: req.kind }, 'run time limit reached — no more AI attempts');
-        break tiers;
-      }
-      const t0 = Date.now();
-      // Never past the run's deadline: an answer that arrives later couldn't be used anyway.
-      const callMs = Math.min(timeoutMs, left());
-      const signal = AbortSignal.timeout(callMs);
-      firstTried ??= tier;
-      const previous = attempts.filter(a => !a.ok && !a.skipped).at(-1);
-      opts.onAttempt?.({ tier, attempt, of: tries, kind: req.kind, ...(tier !== firstTried ? { fallbackFrom: firstTried } : {}), ...(previous ? { previous } : {}) });
+      // A local model takes one request at a time: wait for it before the clock starts (time queued isn't counted).
+      const release = await p.slot?.();
       try {
-        const raw = await p.call(req, signal);
-        const { text, dropped } = dropRunaways(raw.text);
-        const out = dropped ? { ...raw, text } : raw;
-        if (dropped && !out.truncated) {
-          // The rest of a looping answer is often muddled too (on 2026-10-16 Gemini started the Comics section over
-          // and wrote it twice), so ask again once, then the next AI; failing those, ship it minus the broken lines.
-          const error = `got stuck repeating itself (${dropped} broken line${dropped === 1 ? '' : 's'} dropped)`;
-          attempts.push({ tier, attempt, ok: false, ms: Date.now() - t0, finishReason: out.finishReason, error });
-          loopedFallback ??= { tier, out };
-          const again = !loopedOnce && attempt < tries;
-          log.warn({ tier, attempt, kind: req.kind, dropped }, again ? 'LLM got stuck repeating itself — asking again' : 'LLM got stuck repeating itself again — trying next tier');
-          if (!again) break;
-          loopedOnce = true;
-          await sleep(delay);
-          continue;
+        if (left() < (opts.minAttemptMs ?? MIN_ATTEMPT_MS)) {
+          attempts.push({ tier, attempt, ok: false, ms: 0, error: OUT_OF_TIME });
+          log.warn({ tier, attempt, kind: req.kind }, 'run time limit reached — no more AI attempts');
+          break tiers;
         }
-        const rec: AttemptLog = { tier, attempt, ok: true, ms: Date.now() - t0, finishReason: out.finishReason };
-        attempts.push(rec);
-        if (out.truncated) {
-          // Truncated output is usable but incomplete — prefer a later tier that finishes cleanly.
-          log.warn({ ...rec, kind: req.kind }, 'LLM tier answered but output was truncated — trying next tier');
-          truncatedFallback ??= { tier, out };
-          break;
+        const t0 = Date.now();
+        // Never past the run's deadline: an answer that arrives later couldn't be used anyway.
+        const allowedMs = p.timeoutMs?.(req, timeoutMs) ?? timeoutMs;
+        const callMs = Math.min(allowedMs, left());
+        const signal = AbortSignal.timeout(callMs);
+        firstTried ??= tier;
+        const previous = attempts.filter(a => !a.ok && !a.skipped).at(-1);
+        opts.onAttempt?.({ tier, attempt, of: tries, kind: req.kind, ...(tier !== firstTried ? { fallbackFrom: firstTried } : {}), ...(previous ? { previous } : {}) });
+        try {
+          const raw = await p.call(req, signal);
+          const { text, dropped } = dropRunaways(raw.text);
+          const out = dropped ? { ...raw, text } : raw;
+          if (dropped && !out.truncated) {
+            // The rest of a looping answer is often muddled too (on 2026-10-16 Gemini started the Comics section over
+            // and wrote it twice), so ask again once, then the next AI; failing those, ship it minus the broken lines.
+            const error = `got stuck repeating itself (${dropped} broken line${dropped === 1 ? '' : 's'} dropped)`;
+            attempts.push({ tier, attempt, ok: false, ms: Date.now() - t0, finishReason: out.finishReason, error });
+            loopedFallback ??= { tier, out };
+            const again = !loopedOnce && attempt < tries;
+            log.warn({ tier, attempt, kind: req.kind, dropped }, again ? 'LLM got stuck repeating itself — asking again' : 'LLM got stuck repeating itself again — trying next tier');
+            if (!again) break;
+            loopedOnce = true;
+            await sleep(delay);
+            continue;
+          }
+          const rec: AttemptLog = { tier, attempt, ok: true, ms: Date.now() - t0, finishReason: out.finishReason };
+          attempts.push(rec);
+          if (out.truncated) {
+            // Truncated output is usable but incomplete — prefer a later tier that finishes cleanly.
+            log.warn({ ...rec, kind: req.kind }, 'LLM tier answered but output was truncated — trying next tier');
+            truncatedFallback ??= { tier, out };
+            break;
+          }
+          log.info({ ...rec, kind: req.kind, model: out.model, chars: out.text.length }, `LLM answered by ${tier}`);
+          return { tier, model: out.model, text: out.text, finishReason: out.finishReason, truncated: false, attempts, ...(out.local ? { local: out.local } : {}) };
+        } catch (err) {
+          // Providers wrap the abort in their own message ("network error: …aborted"), so check the signal.
+          // A timeout isn't retried: the identical request would just take as long again (×LLM_MAX_TRIES).
+          const le = signal.aborted && callMs < allowedMs
+            ? new LLMError(`stopped after ${Math.round(callMs / 1000)}s: the run's time limit was reached`, false)
+            : signal.aborted
+            ? new LLMError(`timed out after ${Math.round(allowedMs / 1000)}s — the model was still writing; raise LLM_TIMEOUT_MS or LLM_TIMEOUT_PER_SOURCE_MS in .env`, false)
+            : err instanceof LLMError ? err
+            : new LLMError((err as Error).name === 'TimeoutError' ? `timed out after ${timeoutMs}ms` : (err as Error).message, true);
+          attempts.push({ tier, attempt, ok: false, ms: Date.now() - t0, status: le.status, error: le.message });
+          const more = le.retryable && attempt < tries;
+          log.warn({ tier, attempt, kind: req.kind, status: le.status, retryable: le.retryable, err: le.message }, more ? 'LLM attempt failed — retrying' : 'LLM tier failed');
+          if (!more) break;
+          await sleep(Math.min(retryDelay(delay, attempt, le.status, le.message), Math.max(0, left())));
         }
-        log.info({ ...rec, kind: req.kind, model: out.model, chars: out.text.length }, `LLM answered by ${tier}`);
-        return { tier, model: out.model, text: out.text, finishReason: out.finishReason, truncated: false, attempts };
-      } catch (err) {
-        // Providers wrap the abort in their own message ("network error: …aborted"), so check the signal.
-        // A timeout isn't retried: the identical request would just take as long again (×LLM_MAX_TRIES).
-        const le = signal.aborted && callMs < timeoutMs
-          ? new LLMError(`stopped after ${Math.round(callMs / 1000)}s: the run's time limit was reached`, false)
-          : signal.aborted
-          ? new LLMError(`timed out after ${Math.round(timeoutMs / 1000)}s — the model was still writing; raise LLM_TIMEOUT_MS or LLM_TIMEOUT_PER_SOURCE_MS in .env`, false)
-          : err instanceof LLMError ? err
-          : new LLMError((err as Error).name === 'TimeoutError' ? `timed out after ${timeoutMs}ms` : (err as Error).message, true);
-        attempts.push({ tier, attempt, ok: false, ms: Date.now() - t0, status: le.status, error: le.message });
-        const more = le.retryable && attempt < tries;
-        log.warn({ tier, attempt, kind: req.kind, status: le.status, retryable: le.retryable, err: le.message }, more ? 'LLM attempt failed — retrying' : 'LLM tier failed');
-        if (!more) break;
-        await sleep(Math.min(retryDelay(delay, attempt, le.status, le.message), Math.max(0, left())));
+      } finally {
+        release?.();
       }
     }
   }

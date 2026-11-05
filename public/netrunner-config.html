@@ -1061,7 +1061,157 @@ function PromptReady({ parts, platform }) {
   );
 }
 
-function LLMTab({config, update, updateLLMPrimary, runForPrompt, promptResult, promptParts, promptRunState, secrets = {} }) {
+// AI Writer → Local AI: is Ollama running, which model NetRunner uses, downloads and a test, so a model on this
+// computer needs no command line. The server does the work (/api/local-ai); this card shows it.
+const sameModel = (a, b) => { const full = n => (n.includes(":") ? n : n + ":latest").toLowerCase(); return full(a || "") === full(b || ""); };
+const gb = bytes => `${(bytes / 1e9).toFixed(1)} GB`;
+
+function LocalAiCard({ primary }) {
+  const { keys, saveKeys } = React.useContext(KeysCtx);
+  const [st, setSt] = useState(null);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(""); // start | model | test
+  const [other, setOther] = useState("");
+  const [test, setTest] = useState(null);
+  const [testErr, setTestErr] = useState("");
+  const chosenKey = (keys.OLLAMA_MODEL && keys.OLLAMA_MODEL.value) || "";
+  const urlKey = (keys.OLLAMA_URL && keys.OLLAMA_URL.value) || "";
+  const load = React.useCallback(() => api("/api/local-ai", { timeoutMs: 12000 })
+    .then(x => { setSt(x); return x; }).catch(e => { setErr(e.message); return null; }), []);
+  useEffect(() => { load(); }, [load, chosenKey, urlKey]);
+
+  const choose = async name => {
+    setBusy("model"); setErr("");
+    try { await saveKeys({ OLLAMA_MODEL: name }); setTest(null); setTestErr(""); } catch(e) { setErr((e.data && e.data.error) || e.message); }
+    setBusy("");
+  };
+  // While a download runs: follow it, and when it's the first usable model, use it.
+  const pulling = !!(st && st.pull && !st.pull.done);
+  useEffect(() => {
+    if (!pulling) return;
+    const t = setInterval(async () => {
+      const x = await load();
+      if (x && x.pull && x.pull.done && !x.pull.error && !x.chosenInstalled) choose(x.pull.name);
+    }, 1000);
+    return () => clearInterval(t);
+  }, [pulling]);
+
+  const start = async () => {
+    setBusy("start"); setErr("");
+    try {
+      const r = await api("/api/local-ai/start", { method:"POST", timeoutMs: 30000 });
+      if (!r.running) setErr("Ollama didn't answer within 20 seconds. Open it from the Start menu, then press Check again.");
+      await load();
+    } catch(e) { setErr((e.data && e.data.error) || e.message); }
+    setBusy("");
+  };
+  const download = async name => {
+    if (!name) return;
+    setErr("");
+    try { await api("/api/local-ai/pull", { method:"POST", body:{ name } }); setOther(""); await load(); }
+    catch(e) { setErr((e.data && e.data.error) || e.message); }
+  };
+  const runTest = async () => {
+    setBusy("test"); setTest(null); setTestErr("");
+    try { setTest(await api("/api/local-ai/test", { method:"POST", timeoutMs: 330000 })); load(); }
+    catch(e) { setTestErr((e.data && e.data.error) || e.message); }
+    setBusy("");
+  };
+
+  const line = (color, mark, children) => (
+    <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap", fontFamily:F.body, fontSize:14, color:C.body, marginBottom:18 }}>
+      <span style={{ color, fontWeight:700 }}>{mark}</span>{children}
+    </div>
+  );
+  const small = { ...outlineBtn, fontSize:13, padding:"6px 12px" };
+  const link = { color:C.orange, textDecoration:"underline", textUnderlineOffset:3 };
+  const note = { fontFamily:F.body, fontSize:12.5, color:C.muted, margin:"-4px 0 10px", lineHeight:1.5 };
+  const p = st && st.pull;
+  const pct = p && p.total ? Math.round(p.completed / p.total * 100) : 0;
+
+  return (
+    <div style={s.card}>
+      <SectionTitle hint={st && !st.thisComputer ? "free and private: it runs on your own machine" : "free and private: it runs on this computer"} action={<button style={bulkBtn} onClick={() => { setErr(""); load(); }}>Check again</button>}>Local AI</SectionTitle>
+      {primary !== "ollama" && <p style={note}>Writes the digest when the AIs ahead of it fail. Pick Ollama as the primary model to always write on this computer.</p>}
+
+      {!st ? line(C.muted, "…", "Looking for Ollama…")
+        : st.running ? line(C.green, "✓", <>Ollama {st.version} is running{st.thisComputer ? "" : ` at ${st.url}`}.</>)
+        : st.installed ? line(C.orange, "!", <>Ollama is installed but isn't running.{st.canStart && <button style={small} disabled={busy === "start"} onClick={start}>{busy === "start" ? "Starting…" : "Start Ollama"}</button>}</>)
+        : st.installed === false ? line(C.red, "✕", <>Ollama isn't installed. <a style={link} href="https://ollama.com/download" target="_blank" rel="noopener noreferrer">Get Ollama ↗</a> Install it, then press Check again.</>)
+        : line(C.red, "✕", <>Nothing answers at {st.url}. Check the address below, and that Ollama is running there.</>)}
+
+      {st && st.running && (
+        <React.Fragment>
+          <label style={s.label}>Model NetRunner uses</label>
+          {!st.models.length && <p style={note}>No models downloaded yet. Download one below: SmolLM2 is the quickest start.</p>}
+          {st.models.map(m => (
+            <Row key={m.name} label={<span style={{ fontFamily:F.mono, fontSize:13.5 }}>{m.name}</span>} sub={[m.parameters, m.quantization, gb(m.sizeBytes)].filter(Boolean).join(" · ")}>
+              <Radio on={sameModel(m.name, st.chosen)} onClick={busy ? undefined : () => choose(m.name)} />
+            </Row>
+          ))}
+          {!st.chosenInstalled && st.models.length > 0 && (
+            <p style={{ ...note, color:C.red, marginTop:10 }}>NetRunner is set to use {st.chosen}, which isn't downloaded. Pick one above, or download it below.</p>
+          )}
+
+          <label style={{ ...s.label, marginTop:24 }}>Download a model</label>
+          <p style={note}>This computer has {st.ramGb} GB of memory. Smaller models are faster; bigger ones write better.</p>
+          {st.suggested.map(x => (
+            <Row key={x.name} label={<>{x.label} <span style={{ fontFamily:F.mono, fontSize:12, color:C.faint, marginLeft:6 }}>{x.sizeGb} GB</span></>}
+              sub={x.fits ? x.note : `${x.note} This computer may be too small for it.`}>
+              {x.installed ? <span style={{ fontFamily:F.body, fontSize:13, color:C.green, whiteSpace:"nowrap" }}>✓ Downloaded</span>
+                : <button style={small} disabled={pulling} onClick={() => download(x.name)}>Download</button>}
+            </Row>
+          ))}
+          <div style={{ display:"flex", gap:8, marginTop:14 }}>
+            <input style={{ ...s.input, flex:1 }} value={other} spellCheck={false} placeholder="Another model, e.g. llama3.1:8b"
+              onChange={e => setOther(e.target.value)} onKeyDown={e => e.key === "Enter" && !pulling && download(other.trim())} />
+            <button style={small} disabled={pulling || !other.trim()} onClick={() => download(other.trim())}>Download</button>
+          </div>
+          <p style={{ ...note, margin:"7px 0 0", fontSize:11.5, color:C.faint }}>Model names are on <a style={link} href="https://ollama.com/search" target="_blank" rel="noopener noreferrer">ollama.com/search</a>.</p>
+          {p && !p.done && (
+            <div style={{ marginTop:14 }}>
+              <div style={{ fontFamily:F.mono, fontSize:12, color:C.body, marginBottom:6 }}>
+                Downloading {p.name}: {p.total ? `${pct}% (${gb(p.completed)} of ${gb(p.total)})` : p.status}
+              </div>
+              <div style={{ height:6, background:C.pill, borderRadius:3, overflow:"hidden" }}>
+                <div style={{ width:`${pct}%`, height:"100%", background:C.orange, transition:"width .4s" }} />
+              </div>
+            </div>
+          )}
+          {p && p.done && p.error && <p style={{ ...note, color:C.red, marginTop:12 }}>Couldn't download {p.name}: {p.error}</p>}
+
+          <label style={{ ...s.label, marginTop:24 }}>Test</label>
+          <p style={note}>Runs the model on two sample stories the way a digest does, and times it. The time forecast next to Run News Digest then uses that speed.</p>
+          <button style={small} disabled={busy === "test" || !st.chosenInstalled} onClick={runTest}>
+            {busy === "test" ? "Testing… (loading the model can take a minute)" : `Test ${st.chosen}`}
+          </button>
+          {testErr && <p style={{ ...note, color:C.red, marginTop:10 }}>{testErr}</p>}
+          {test && (
+            <div style={{ marginTop:12, padding:"12px 14px", border:`1px solid ${C.border}`, background:C.bg, borderRadius:4 }}>
+              <div style={{ fontFamily:F.body, fontSize:14, color:C.text }}>
+                <b>{test.secondsPerStory} s a story</b>{test.loadSeconds ? <span style={{ color:C.muted }}> · loading the model took {test.loadSeconds} s</span> : null}
+              </div>
+              {test.results.map(r => (
+                <div key={r.title} style={{ marginTop:12 }}>
+                  <div style={{ fontFamily:F.body, fontSize:12.5, color:C.muted }}>{r.title}</div>
+                  <div style={{ fontFamily:F.body, fontSize:13.5, color:C.body, marginTop:3, lineHeight:1.5 }}>{r.used}</div>
+                  {!r.passed && <div style={{ fontFamily:F.body, fontSize:12, color:C.faint, marginTop:4, lineHeight:1.5 }}>Its own answer didn't pass NetRunner's checks, so the story's opening is used instead. It wrote: "{r.answer}"</div>}
+                </div>
+              ))}
+            </div>
+          )}
+        </React.Fragment>
+      )}
+
+      <div style={{ marginTop:24 }}>
+        <KeyField k="OLLAMA_URL" label="Ollama address" secret={false} placeholder="http://localhost:11434" help="Leave it as it is when Ollama runs on this computer. To use Ollama on another machine, enter its address, e.g. http://192.168.1.20:11434." />
+      </div>
+      {err && <p style={{ ...note, color:C.red, margin:"4px 0 0" }}>{err}</p>}
+    </div>
+  );
+}
+
+function LLMTab({config, update, updateLLMPrimary, runForPrompt, promptResult, promptParts, promptRunState, promptError = "", secrets = {} }) {
   const chain = config.llm.fallbackChain;
   const move = (i, dir) => {
     const next = [...chain];
@@ -1089,7 +1239,7 @@ function LLMTab({config, update, updateLLMPrimary, runForPrompt, promptResult, p
           option="OPTION A"
           title="Autopilot"
           icon={c => <BoltIcon color={c} />}
-          desc="NetRunner runs the digest for you. Connects to Gemini, Claude, or Ollama — pick your model, add your API key, and it writes and delivers the digest automatically."
+          desc="NetRunner runs the digest for you. Connects to Gemini, Claude, or a free model on this computer (Ollama), and it writes and delivers the digest automatically."
           badge={
             <span style={{ display:"inline-block", fontFamily:F.mono, fontSize:10, letterSpacing:"0.12em", padding:"5px 10px", borderRadius:3,
               background: isAuto ? C.orange : "transparent", color: isAuto ? "#1a0d07" : C.orange, border:`1px solid ${isAuto ? C.orange : C.orangeLn}` }}>
@@ -1121,17 +1271,17 @@ function LLMTab({config, update, updateLLMPrimary, runForPrompt, promptResult, p
             {["gemini","claude","ollama"].map(m => {
               const disabled = false; // Ollama is wired as a real tier now (RSS-only, no web search)
               return (
-              <Row key={m} label={<span style={{ opacity: disabled ? 0.45 : 1 }}>{cap(m)}</span>} sub={m==="gemini" ? "Recommended — Google Search grounding" : m==="claude" ? "Claude Haiku — web search fallback" : "Local — RSS-only, no web search"}>
+              <Row key={m} label={<span style={{ opacity: disabled ? 0.45 : 1 }}>{cap(m)}</span>} sub={m==="gemini" ? "Recommended — Google Search grounding" : m==="claude" ? "Claude Haiku — web search fallback" : "On this computer: free and private. Summarizes your feeds; no web search"}>
                 <Radio on={primary===m} onClick={disabled ? undefined : () => updateLLMPrimary(m)} />
               </Row>
               );
             })}
           </div>
+          {primary === "ollama" && <LocalAiCard primary={primary} />}
           <div style={s.card}>
             <SectionTitle hint="keys stay on the server, never in the browser or config">API keys</SectionTitle>
             <KeyField k="GEMINI_API_KEY" label="Gemini API key" placeholder="AIza…" help="Get one at aistudio.google.com → Get API key." />
             <KeyField k="ANTHROPIC_API_KEY" label="Claude API key" placeholder="sk-ant-…" help="Get one at console.anthropic.com → API Keys." />
-            <KeyField k="OLLAMA_URL" label="Ollama address" secret={false} placeholder="http://localhost:11434" help="Ollama runs locally, so it needs no key, just the address it listens on." />
             <EnvFileLinks />
           </div>
           <div style={s.card}>
@@ -1148,9 +1298,10 @@ function LLMTab({config, update, updateLLMPrimary, runForPrompt, promptResult, p
               );
             })}
           </div>
+          {primary !== "ollama" && <LocalAiCard primary={primary} />}
           <div style={s.card}>
             <SectionTitle hint="read-only: it never changes a digest">Grader</SectionTitle>
-            <Row label="Grade each digest" sub="After each digest is sent, NetRunner checks it: repeated stories, switched-off topics, missing links and outlets, filtered clips, and (with a second AI, a different one from the writer when you have its key) stories told twice, in the wrong section, unattributed rumors, and filler. The grade and every problem it found show on the Output tab. Costs one AI request per digest.">
+            <Row label="Grade each digest" sub="After each digest is sent, NetRunner checks it: repeated stories, switched-off topics, missing links and outlets, filtered clips, and (with a second AI, a different one from the writer when you have its key) stories told twice, in the wrong section, unattributed rumors, and filler. The grade and every problem it found show on the Output tab. Costs one AI request per digest. A local model doesn't grade: those checks need Gemini or Claude.">
               <Toggle on={config.llm.grade !== false} onChange={v => update("llm.grade", v)} />
             </Row>
           </div>
@@ -1182,10 +1333,20 @@ function LLMTab({config, update, updateLLMPrimary, runForPrompt, promptResult, p
         </div>
       )}
 
-      {!isAuto && (
-        <div style={s.card}>
-          <SectionTitle hint="generate and preview your chatbot prompt">Prompt</SectionTitle>
-          <p style={{ ...s.sub, marginTop:-6, marginBottom:16 }}>Runs the workflow now and returns the ready-to-paste prompt for {config.delivery.chatbotPlatform ? config.delivery.chatbotPlatform.charAt(0).toUpperCase()+config.delivery.chatbotPlatform.slice(1) : "your selected platform"}. Save your config first.</p>
+      {/* Also in Autopilot: a prompt only reads the feeds, so it can be made any time, even while a digest is running. */}
+      <div style={s.card}>
+          <SectionTitle hint={isAuto ? "a copy-paste prompt for a chatbot, any time: Autopilot keeps running as usual" : "generate and preview your chatbot prompt"}>{isAuto ? "Copy-paste prompt" : "Prompt"}</SectionTitle>
+          {isAuto && (
+            <div style={{ marginBottom:16 }}>
+              <label style={s.label}>Chatbot</label>
+              <select style={{ ...s.select, width:"100%" }} value={config.delivery.chatbotPlatform} onChange={e => update("delivery.chatbotPlatform", e.target.value)}>
+                {["chatgpt","claude","gemini","grok","deepseek"].map(p => (
+                  <option key={p} value={p}>{p.charAt(0).toUpperCase()+p.slice(1)}</option>
+                ))}
+              </select>
+            </div>
+          )}
+          <p style={{ ...s.sub, marginTop:-6, marginBottom:16 }}>Fetches your sources now and returns the ready-to-paste prompt for {config.delivery.chatbotPlatform ? config.delivery.chatbotPlatform.charAt(0).toUpperCase()+config.delivery.chatbotPlatform.slice(1) : "your selected platform"}. Your settings are saved first.</p>
           <button
             onClick={runForPrompt}
             disabled={promptRunState === "running"}
@@ -1197,9 +1358,9 @@ function LLMTab({config, update, updateLLMPrimary, runForPrompt, promptResult, p
             <span style={{ fontSize:"0.85em" }}>{promptRunState === "running" ? "◌" : promptRunState === "success" ? "✓" : promptRunState === "error" ? "✕" : "▶"}</span>
             {promptRunState === "running" ? "Generating…" : promptRunState === "success" ? "Prompt Ready" : promptRunState === "error" ? "Run Failed" : "Generate Prompt"}
           </button>
+          {promptRunState === "error" && promptError && <p style={{ fontFamily:F.body, fontSize:12.5, color:C.red, margin:"10px 0 0", whiteSpace:"pre-wrap" }}>{promptError}</p>}
           {promptParts && <PromptReady parts={promptParts} platform={config.delivery.chatbotPlatform} />}
-        </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -1323,7 +1484,7 @@ function RollupsTab({ config, update }) {
   );
 }
 
-function CustomBulkField({ label, sub, items, onAddAll, onRemove, placeholder }) {
+function CustomBulkField({ label, sub, items, onAddAll, onRemove, placeholder, hideList = false }) {
   const [text, setText] = useState("");
   const handleAddAll = () => {
     const lines = text.split(/[\n,]+/).map(v => v.trim()).filter(Boolean);
@@ -1347,7 +1508,7 @@ function CustomBulkField({ label, sub, items, onAddAll, onRemove, placeholder })
       <div style={{ marginTop:10 }}>
         <button onClick={handleAddAll} style={outlineBtn}>Add all</button>
       </div>
-      <div style={{ marginTop:12, display:"flex", flexWrap:"wrap", gap:7 }}>
+      {!hideList && <div style={{ marginTop:12, display:"flex", flexWrap:"wrap", gap:7 }}>
         {items.map((item, i) => (
           <span key={i} style={s.tag}>
             {item}
@@ -1355,7 +1516,7 @@ function CustomBulkField({ label, sub, items, onAddAll, onRemove, placeholder })
           </span>
         ))}
         {!items.length && <span style={{ fontSize:13, fontFamily:F.body, color:C.faint, fontStyle:"italic" }}>None added yet</span>}
-      </div>
+      </div>}
     </div>
   );
 }
@@ -1480,6 +1641,78 @@ function YouTubeResolveField({ items, onAddAll, onAddEntry, onRemove }) {
 }
 
 // Add your own → Bluesky: a handle or profile link, checked with Bluesky before it's added.
+// Add your own → RSS: checks the feed first and shows what it found, like the YouTube and Bluesky fields.
+// A site's address works too (its advertised feed is used). Pasting several at once skips the check.
+function RssField({ items, onAdd, onAddAll, onRemove }) {
+  const [input, setInput] = useState("");
+  const [state, setState] = useState("idle"); // idle | running | success | error
+  const [error, setError] = useState("");
+  const [last, setLast] = useState(null);
+  const [bulk, setBulk] = useState(false);
+  const add = async () => {
+    if (!input.trim()) return;
+    setState("running"); setError(""); setLast(null);
+    try {
+      const f = await api("/api/resolve-feed", { method: "POST", body: { query: input.trim() } });
+      onAdd(f.url);
+      setLast(f);
+      setState("success"); setInput("");
+    } catch(e) {
+      setState("error"); setError((e.data && e.data.error) || e.message);
+    }
+    setTimeout(() => setState("idle"), 5000);
+  };
+  const daysAgo = iso => { const d = Math.floor((Date.now() - Date.parse(iso)) / 864e5); return d <= 0 ? "today" : d === 1 ? "yesterday" : `${d} days ago`; };
+  const host = u => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch(e) { return u; } };
+  const color = state === "success" ? C.green : state === "error" ? C.red : C.orangeLn;
+  const link = { fontFamily:F.mono, fontSize:11.5, color:C.orange, cursor:"pointer", background:"none", border:"none", padding:0, textDecoration:"underline", textUnderlineOffset:3 };
+  return (
+    <div style={{ marginBottom:26 }}>
+      <label style={s.label}>RSS feeds</label>
+      <p style={{ fontSize:13, fontFamily:F.body, color:C.muted, marginBottom:9 }}>Paste a feed address (or just the site's address: NetRunner finds its feed) and press Add.</p>
+      <div style={{ display:"flex", gap:8 }}>
+        <input style={{ ...s.input, flex:1 }} value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === "Enter" && add()}
+          spellCheck={false} placeholder="https://example.com/feed.xml or example.com" />
+        <button onClick={add} disabled={state === "running"}
+          style={{ ...s.btn, background: state === "success" ? C.green : state === "error" ? C.red : "transparent",
+            color: (state === "idle" || state === "running") ? C.orange : "#1a0d07", border:`1px solid ${color}`, opacity: state === "running" ? 0.7 : 1, whiteSpace:"nowrap" }}>
+          {state === "running" ? "Checking…" : state === "success" ? "✓ Added" : state === "error" ? "Not a feed" : "Add"}
+        </button>
+      </div>
+      {state === "error" && error && <p style={{ fontFamily:F.body, fontSize:12.5, color:C.red, marginTop:8 }}>{error}</p>}
+      {last && (
+        <div style={{ display:"flex", alignItems:"center", gap:11, marginTop:12, padding:"10px 12px", border:`1px solid ${C.green}55`, background:`${C.green}10`, borderRadius:4 }}>
+          {last.icon ? <img src={last.icon} alt="" referrerPolicy="no-referrer" onError={e => { e.currentTarget.style.visibility = "hidden"; }} style={{ width:34, height:34, borderRadius:6, flexShrink:0, objectFit:"cover", background:C.pill }} />
+            : <span style={{ width:34, height:34, borderRadius:6, background:C.pill, flexShrink:0 }} />}
+          <div style={{ flex:1, minWidth:0 }}>
+            <div style={{ fontFamily:F.body, fontSize:14.5, color:C.text, fontWeight:600 }}>{last.title || host(last.url)}</div>
+            <div style={{ fontFamily:F.body, fontSize:12, color:C.muted, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+              {host(last.url)} · {last.items} {last.items === 1 ? "story" : "stories"}{last.newest ? ` · newest ${daysAgo(last.newest)}` : ""}{last.newestTitle ? `: ${last.newestTitle}` : ""}
+            </div>
+          </div>
+          <span style={{ color:C.green, fontWeight:700, fontSize:18 }}>✓</span>
+        </div>
+      )}
+      <div style={{ marginTop:12, display:"flex", flexWrap:"wrap", gap:7 }}>
+        {items.map((item, i) => (
+          <span key={i} style={s.tag} title={item}>
+            {host(item)}
+            <span onClick={() => onRemove(i)} style={{ cursor:"pointer", color:C.red, marginLeft:2, fontWeight:700 }}>✕</span>
+          </span>
+        ))}
+        {!items.length && <span style={{ fontSize:13, fontFamily:F.body, color:C.faint, fontStyle:"italic" }}>None added yet</span>}
+      </div>
+      <p style={{ margin:"10px 0 0" }}><button style={link} onClick={() => setBulk(v => !v)}>{bulk ? "Hide" : "Paste several at once (not checked)"}</button></p>
+      {bulk && (
+        <div style={{ marginTop:10 }}>
+          <CustomBulkField label="Several feeds" sub="One address per line. These are added without checking." items={[]} hideList onAddAll={onAddAll} onRemove={() => {}}
+            placeholder={"https://example.com/feed.xml\nhttps://another-site.com/rss"} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 function BlueskyField({ items, onAdd, onRemove }) {
   const [input, setInput] = useState("");
   const [state, setState] = useState("idle"); // idle | running | success | error
@@ -1573,13 +1806,11 @@ function CustomSourcesTab({ config, update }) {
     <div>
       <div id="add-your-own" style={{ ...s.card, marginTop:22 }}>
         <SectionTitle hint="fetched with the built-in sources, shown under Custom Feeds">Add your own</SectionTitle>
-        <CustomBulkField
-          label="RSS feeds"
-          sub="Paste one or more RSS feed URLs, one per line."
+        <RssField
           items={config.customSources.rss}
+          onAdd={url => addAll("rss", [url])}
           onAddAll={lines => addAll("rss", lines)}
           onRemove={i => remove("rss", i)}
-          placeholder={"https://example.com/feed.xml\nhttps://another-site.com/rss"}
         />
         <YouTubeResolveField
           items={config.customSources.youtube}
@@ -1610,6 +1841,11 @@ const GRADE_LOOK = {
   fail:      { label:"FAIL",            icon:"✕", color:C.red },
 };
 const GRADABLE_MODES = ["morning", "nightly"];
+// What the badge says: how many checks failed, not the score. "NEEDS ATTENTION 99/100" read as a contradiction
+// (Zion, 2026-10-26): one failed check is a problem however well the rest scored.
+const problemsOf = report => report.checks.filter(c => !c.pass && !c.skipped).length;
+const gradeHeadline = g => g.verdict === "pass" ? "No problems found"
+  : `${g.problems ?? "Some"} problem${g.problems === 1 ? "" : "s"} found${g.verdict === "fail" ? " · one is serious" : ""}`;
 
 function GradeCheck({ c }) {
   const [open, setOpen] = useState(false);
@@ -1622,7 +1858,7 @@ function GradeCheck({ c }) {
           {c.name}{c.grader === "ai" && <span style={{ fontFamily:F.mono, fontSize:9.5, color:C.cyan, border:`1px solid ${C.cyan}55`, borderRadius:3, padding:"1px 5px", marginLeft:8 }}>AI</span>}
           <span style={{ display:"block", fontSize:12.5, color:C.muted, marginTop:2 }}>{c.summary}</span>
         </span>
-        {!c.skipped && <span style={{ fontFamily:F.mono, fontSize:11.5, color }}>{Math.round(c.score * 100)}</span>}
+        {!c.skipped && !c.pass && <span style={{ fontFamily:F.mono, fontSize:11.5, color, whiteSpace:"nowrap" }}>{Math.round(c.score * 100)}% ok</span>}
         {c.evidence.length > 0 && <span style={{ fontFamily:F.mono, fontSize:11, color:C.faint }}>{open ? "▾" : "▸"}</span>}
       </div>
       {open && (
@@ -1639,7 +1875,7 @@ function GradePanel({ entry, onGraded }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const summary = report ? { score: report.score, verdict: report.verdict } : entry.grade;
+  const summary = report ? { score: report.score, verdict: report.verdict, problems: problemsOf(report) } : entry.grade;
   const toggle = async () => {
     if (open) { setOpen(false); return; }
     setOpen(true);
@@ -1659,7 +1895,7 @@ function GradePanel({ entry, onGraded }) {
       <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
         {summary ? (
           <button onClick={toggle} title="What the grader checked" style={{ ...s.btn, fontSize:12.5, padding:"6px 12px", background:"transparent", color:look.color, border:`1px solid ${look.color}66`, display:"inline-flex", alignItems:"center", gap:8 }}>
-            <span style={{ fontWeight:700 }}>{look.icon}</span>{look.label}<span style={{ fontFamily:F.mono }}>{summary.score}/100</span><span style={{ color:C.faint }}>{open ? "▾" : "▸"}</span>
+            <span style={{ fontWeight:700 }}>{look.icon}</span>{gradeHeadline(summary)}<span style={{ color:C.faint }}>{open ? "▾" : "▸"}</span>
           </button>
         ) : <span style={{ fontFamily:F.body, fontSize:13, color:C.muted }}>Not graded yet.</span>}
         {(!summary || open) && GRADABLE_MODES.includes(entry.mode) && (
@@ -1672,7 +1908,8 @@ function GradePanel({ entry, onGraded }) {
       {open && report && (
         <div style={{ marginTop:10, padding:"10px 14px 6px", border:`1px solid ${C.border}`, borderRadius:5, background:C.panel2 }}>
           <div style={{ fontFamily:F.body, fontSize:12.5, color:C.muted, marginBottom:6 }}>
-            {report.bullets} stories checked{report.graderModel ? ` · AI checks by ${report.graderModel.split(":")[1] || report.graderModel}` : ""} · {new Date(report.gradedAt).toLocaleString()}. The grader only reads: it never changes the digest. Click a check to see what it found.
+            {report.bullets} stories checked{report.graderModel ? ` · AI checks by ${report.graderModel.split(":")[1] || report.graderModel}` : ""} · {new Date(report.gradedAt).toLocaleString()}. Problems are listed first; click one to see the lines it found. The grader only reads: it never changes the digest.
+            <span style={{ display:"block", color:C.faint }}>Overall {report.score}/100: how much of the digest passed each check. A single failed check is still a problem, whatever this number says.</span>
             {report.notes && report.notes.map((n, i) => <span key={i} style={{ display:"block", color:C.faint }}>{n}</span>)}
           </div>
           {[...report.checks].sort((a, b) => order(a) - order(b)).map(c => <GradeCheck key={c.id} c={c} />)}
@@ -1827,7 +2064,7 @@ function OutputTab({ entries, selectedId, onSelect, onRemove, onImport, showDefa
                       display:"flex", alignItems:"center", justifyContent:"space-between", gap:6, padding:"8px 16px",
                       cursor:"pointer", background: active ? C.orangeDim : "transparent", borderLeft:`3px solid ${active ? C.orange : "transparent"}` }}>
                       <span style={{ fontFamily:F.body, fontSize:13, color: active ? C.orange : C.text, textTransform:"capitalize", display:"flex", alignItems:"center", gap:6 }}>
-                        <span>{MODE_ICON[e.mode] || "📄"}</span>{e.mode}{e.grade && <span title={`Grade ${e.grade.score} · ${GRADE_LOOK[e.grade.verdict]?.label || e.grade.verdict}`} style={{ width:6, height:6, borderRadius:"50%", background:(GRADE_LOOK[e.grade.verdict] || GRADE_LOOK.attention).color, marginLeft:2 }} />}
+                        <span>{MODE_ICON[e.mode] || "📄"}</span>{e.mode}{e.grade && <span title={gradeHeadline(e.grade)} style={{ width:6, height:6, borderRadius:"50%", background:(GRADE_LOOK[e.grade.verdict] || GRADE_LOOK.attention).color, marginLeft:2 }} />}
                       </span>
                       <span onClick={ev => { ev.stopPropagation(); onRemove(e.id); }} style={{ color:C.faint, fontSize:12, cursor:"pointer" }}>✕</span>
                     </div>
@@ -1955,6 +2192,7 @@ function DigestConfig() {
   const [promptResult, setPromptResult]     = useState(null);
   const [promptParts, setPromptParts]       = useState(null);
   const [promptRunState, setPromptRunState] = useState("idle");
+  const [promptError, setPromptError] = useState("");
   // Output history lives on the server (GET /api/digests) — survives cache clears, and
   // includes every scheduled run, not just ones started from this browser.
   const [outputEntries, setOutputEntries] = useState([]);
@@ -2043,6 +2281,7 @@ function DigestConfig() {
 
   const runForPrompt = async () => {
     setPromptRunState("running");
+    setPromptError("");
     setPromptResult(null);
     setPromptParts(null);
     try {
@@ -2059,13 +2298,15 @@ function DigestConfig() {
         setPromptRunState("success");
         const date = payload.date || new Date().toISOString().slice(0,10);
         await addEntry(date, payload.mode || "manual", payload.digest, false, payload.digestId);
+        setTimeout(() => setPromptRunState("idle"), 4000);
       } else {
         setPromptRunState("error");
+        setPromptError("The server returned no prompt. Try again.");
       }
-      setTimeout(() => setPromptRunState("idle"), 4000);
     } catch(e) {
+      // Stays up until the next try, with the reason (it used to flash "Run Failed" for 6 s and say nothing).
       setPromptRunState("error");
-      setTimeout(() => setPromptRunState("idle"), 6000);
+      setPromptError((e.data && e.data.error) || e.message);
     }
   };
 
@@ -2253,7 +2494,7 @@ function DigestConfig() {
       {tab === "sources"   && <React.Fragment><SourcesTab config={config} update={update} /><CustomSourcesTab config={config} update={update} /></React.Fragment>}
       {tab === "delivery"  && <DeliveryTab  config={config} update={update} secrets={secrets} />}
       {tab === "schedule"  && <React.Fragment><ScheduleTab config={config} update={update} pending={schedulePending} /><RollupsTab config={config} update={update} /></React.Fragment>}
-      {tab === "llm"       && <LLMTab       config={config} update={update} updateLLMPrimary={updateLLMPrimary} runForPrompt={runForPrompt} promptResult={promptResult} promptParts={promptParts} promptRunState={promptRunState} secrets={secrets} />}
+      {tab === "llm"       && <LLMTab       config={config} update={update} updateLLMPrimary={updateLLMPrimary} runForPrompt={runForPrompt} promptResult={promptResult} promptParts={promptParts} promptRunState={promptRunState} promptError={promptError} secrets={secrets} />}
       {tab === "format"    && <FormatTab    config={config} update={update} />}
       {tab === "output"    && <OutputTab showDefaults={{ excluded: config.format.showExcluded !== false, everythingElse: config.format.showEverythingElse !== false }} entries={outputEntries} selectedId={selectedEntryId} onSelect={setSelectedEntryId} onRemove={removeEntry} onImport={importMdFile} onGraded={refreshEntries} />}
     </KeysCtx.Provider>

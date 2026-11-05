@@ -147,6 +147,58 @@ const TARGETS = [
   },
 ];
 
+// The user's own feeds (Add your own). On 2026-10-26 Gemini put all 31 stories from Zion's own game feed in
+// EXCLUDED as "filler", and the Claude chatbot spread them over Gaming: neither knew which stories were his.
+// Also: "has custom feeds" still counted the removed X lists and not Bluesky accounts.
+const CUSTOM_RULE = 'CUSTOM FEEDS: feed items with "category": "Custom Feeds" come from feeds the user added by hand. Every one goes under ## 📡 Custom Feeds, never in another section and never in 🗒️ EXCLUDED as filler or unverified (the user chose them). Only a duplicate of another feed item may be excluded.';
+const CUSTOM_PAYLOAD_PATCHES = [
+  {
+    id: 'custom-bluesky-payload',
+    why: 'Custom Feeds counted the removed X lists, not Bluesky accounts, when deciding whether the section exists.',
+    from: '(config?.customSources?.xcancel || []).length) > 0;',
+    to: '(config?.customSources?.bluesky || []).length) > 0;',
+  },
+  {
+    id: 'custom-rule-payload',
+    why: "The user's own feeds were excluded as filler: they now always go under Custom Feeds.",
+    from: 'RSS FEED DATA: You will receive pre-fetched RSS items as JSON. USE THEM as your primary source. Do not ignore them.\n',
+    to: `RSS FEED DATA: You will receive pre-fetched RSS items as JSON. USE THEM as your primary source. Do not ignore them.\n${CUSTOM_RULE}\n`,
+  },
+];
+const customExport = name => [
+  {
+    id: `custom-bluesky-${name}`,
+    why: 'Copy-paste exporters: Custom Feeds counted the removed X lists, not Bluesky accounts.',
+    from: '(cfg?.customSources?.xcancel || []).length) > 0;',
+    to: '(cfg?.customSources?.bluesky || []).length) > 0;',
+  },
+  {
+    id: `custom-mark-${name}`,
+    why: "Copy-paste exporters: mark the user's own feeds in the list, so the chatbot puts them under Custom Feeds.",
+    from: '  return { title, url, source: it.official && source ? `${source} [official]` : source, snippet };',
+    to: "  return { title, url, source: it.official && source ? `${source} [official]` : it.category === 'Custom Feeds' && source ? `${source} [custom feed]` : source, snippet };",
+  },
+  {
+    id: `custom-rule-${name}`,
+    why: "Copy-paste exporters: the user's own feeds go under Custom Feeds, never another section or EXCLUDED.",
+    from: '- 📡 Custom Feeds — sources added manually by the user. Report items same as any built-in category;',
+    to: '- 📡 Custom Feeds — sources added manually by the user: every feed item marked [custom feed] goes here, never in another section and never in EXCLUDED as filler (only a duplicate may be excluded);',
+  },
+  {
+    id: `snippet-length-${name}`,
+    why: 'Copy-paste exporters: 200 characters of story text is too little for a 2-3 sentence or full summary (Zion, 2026-10-26).',
+    from: "  if (snippet.length > 200) snippet = snippet.slice(0, 200).trim() + '…';",
+    to: "  const max = (() => { try { return $('Parse Config').first().json.config?.format?.summaryLength; } catch (e) { return undefined; } })() === '1' ? 200 : 500;\n  if (snippet.length > max) snippet = snippet.slice(0, max).trim() + '…';",
+  },
+  {
+    id: `entities-${name}`,
+    why: 'Copy-paste exporters: numbered HTML entities ("Sid Meier&#39;s") reached the chatbot and its digest.',
+    from: ".replace(/&[a-z]+;/gi, ' ')",
+    to: ".replace(/&#(\\d+);/g, (_, n) => String.fromCodePoint(Number(n))).replace(/&amp;/gi, '&').replace(/&[a-z]+;/gi, ' ')",
+  },
+];
+for (const t of TARGETS) t.patches.push(...(t.out === 'buildLlmPayload.ts' ? CUSTOM_PAYLOAD_PATCHES : customExport(t.out.replace(/^export|\.ts$/g, '').toLowerCase())));
+
 const applied = [];
 for (const t of TARGETS) {
   let code = fs.readFileSync(path.join(nodes, t.file), 'utf8').replace(/\r\n/g, '\n');

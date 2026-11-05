@@ -95,6 +95,16 @@
     "why": "Items from official bodies carry \"official\": true; when an agency and the press cover the same story, the agency's own word leads."
   },
   {
+    "id": "custom-bluesky-payload",
+    "node": "Build LLM Payload",
+    "why": "Custom Feeds counted the removed X lists, not Bluesky accounts, when deciding whether the section exists."
+  },
+  {
+    "id": "custom-rule-payload",
+    "node": "Build LLM Payload",
+    "why": "The user's own feeds were excluded as filler: they now always go under Custom Feeds."
+  },
+  {
     "id": "summary-length-def-chatgpt",
     "node": "digest_export_(ChatGPT)",
     "why": "Copy-paste exporters ignored format.summaryLength; read it from the config (same three options as Build LLM Payload)."
@@ -193,6 +203,31 @@
     "id": "topics-headers-blindspot-leaks-chatgpt",
     "node": "digest_export_(ChatGPT)",
     "why": "Hardcoded Blindspot and Leaks & Rumors headers removed: fixes the duplicate Leaks header and makes both toggleable."
+  },
+  {
+    "id": "custom-bluesky-chatgpt",
+    "node": "digest_export_(ChatGPT)",
+    "why": "Copy-paste exporters: Custom Feeds counted the removed X lists, not Bluesky accounts."
+  },
+  {
+    "id": "custom-mark-chatgpt",
+    "node": "digest_export_(ChatGPT)",
+    "why": "Copy-paste exporters: mark the user's own feeds in the list, so the chatbot puts them under Custom Feeds."
+  },
+  {
+    "id": "custom-rule-chatgpt",
+    "node": "digest_export_(ChatGPT)",
+    "why": "Copy-paste exporters: the user's own feeds go under Custom Feeds, never another section or EXCLUDED."
+  },
+  {
+    "id": "snippet-length-chatgpt",
+    "node": "digest_export_(ChatGPT)",
+    "why": "Copy-paste exporters: 200 characters of story text is too little for a 2-3 sentence or full summary (Zion, 2026-10-26)."
+  },
+  {
+    "id": "entities-chatgpt",
+    "node": "digest_export_(ChatGPT)",
+    "why": "Copy-paste exporters: numbered HTML entities (\"Sid Meier&#39;s\") reached the chatbot and its digest."
   },
   {
     "id": "summary-length-def-claude",
@@ -295,6 +330,31 @@
     "why": "Hardcoded Blindspot and Leaks & Rumors headers removed: fixes the duplicate Leaks header and makes both toggleable."
   },
   {
+    "id": "custom-bluesky-claude",
+    "node": "digest_export_(Claude)",
+    "why": "Copy-paste exporters: Custom Feeds counted the removed X lists, not Bluesky accounts."
+  },
+  {
+    "id": "custom-mark-claude",
+    "node": "digest_export_(Claude)",
+    "why": "Copy-paste exporters: mark the user's own feeds in the list, so the chatbot puts them under Custom Feeds."
+  },
+  {
+    "id": "custom-rule-claude",
+    "node": "digest_export_(Claude)",
+    "why": "Copy-paste exporters: the user's own feeds go under Custom Feeds, never another section or EXCLUDED."
+  },
+  {
+    "id": "snippet-length-claude",
+    "node": "digest_export_(Claude)",
+    "why": "Copy-paste exporters: 200 characters of story text is too little for a 2-3 sentence or full summary (Zion, 2026-10-26)."
+  },
+  {
+    "id": "entities-claude",
+    "node": "digest_export_(Claude)",
+    "why": "Copy-paste exporters: numbered HTML entities (\"Sid Meier&#39;s\") reached the chatbot and its digest."
+  },
+  {
     "id": "summary-length-def-grok",
     "node": "digest_export_(grok)",
     "why": "Copy-paste exporters ignored format.summaryLength; read it from the config (same three options as Build LLM Payload)."
@@ -395,6 +455,31 @@
     "why": "Hardcoded Blindspot and Leaks & Rumors headers removed: fixes the duplicate Leaks header and makes both toggleable."
   },
   {
+    "id": "custom-bluesky-grok",
+    "node": "digest_export_(grok)",
+    "why": "Copy-paste exporters: Custom Feeds counted the removed X lists, not Bluesky accounts."
+  },
+  {
+    "id": "custom-mark-grok",
+    "node": "digest_export_(grok)",
+    "why": "Copy-paste exporters: mark the user's own feeds in the list, so the chatbot puts them under Custom Feeds."
+  },
+  {
+    "id": "custom-rule-grok",
+    "node": "digest_export_(grok)",
+    "why": "Copy-paste exporters: the user's own feeds go under Custom Feeds, never another section or EXCLUDED."
+  },
+  {
+    "id": "snippet-length-grok",
+    "node": "digest_export_(grok)",
+    "why": "Copy-paste exporters: 200 characters of story text is too little for a 2-3 sentence or full summary (Zion, 2026-10-26)."
+  },
+  {
+    "id": "entities-grok",
+    "node": "digest_export_(grok)",
+    "why": "Copy-paste exporters: numbered HTML entities (\"Sid Meier&#39;s\") reached the chatbot and its digest."
+  },
+  {
     "id": "summary-length-def-deepseek",
     "node": "Digest_export_[DeepSeek]",
     "why": "Copy-paste exporters ignored format.summaryLength; read it from the config (same three options as Build LLM Payload)."
@@ -493,6 +578,31 @@
     "id": "topics-headers-blindspot-leaks-deepseek",
     "node": "Digest_export_[DeepSeek]",
     "why": "Hardcoded Blindspot and Leaks & Rumors headers removed: fixes the duplicate Leaks header and makes both toggleable."
+  },
+  {
+    "id": "custom-bluesky-deepseek",
+    "node": "Digest_export_[DeepSeek]",
+    "why": "Copy-paste exporters: Custom Feeds counted the removed X lists, not Bluesky accounts."
+  },
+  {
+    "id": "custom-mark-deepseek",
+    "node": "Digest_export_[DeepSeek]",
+    "why": "Copy-paste exporters: mark the user's own feeds in the list, so the chatbot puts them under Custom Feeds."
+  },
+  {
+    "id": "custom-rule-deepseek",
+    "node": "Digest_export_[DeepSeek]",
+    "why": "Copy-paste exporters: the user's own feeds go under Custom Feeds, never another section or EXCLUDED."
+  },
+  {
+    "id": "snippet-length-deepseek",
+    "node": "Digest_export_[DeepSeek]",
+    "why": "Copy-paste exporters: 200 characters of story text is too little for a 2-3 sentence or full summary (Zion, 2026-10-26)."
+  },
+  {
+    "id": "entities-deepseek",
+    "node": "Digest_export_[DeepSeek]",
+    "why": "Copy-paste exporters: numbered HTML entities (\"Sid Meier&#39;s\") reached the chatbot and its digest."
   },
   {
     "id": "literal-template-gemini-bf",
@@ -608,5 +718,30 @@
     "id": "topics-headers-blindspot-leaks-gemini",
     "node": "digest_export_(Gemini)",
     "why": "Hardcoded Blindspot and Leaks & Rumors headers removed: fixes the duplicate Leaks header and makes both toggleable."
+  },
+  {
+    "id": "custom-bluesky-gemini",
+    "node": "digest_export_(Gemini)",
+    "why": "Copy-paste exporters: Custom Feeds counted the removed X lists, not Bluesky accounts."
+  },
+  {
+    "id": "custom-mark-gemini",
+    "node": "digest_export_(Gemini)",
+    "why": "Copy-paste exporters: mark the user's own feeds in the list, so the chatbot puts them under Custom Feeds."
+  },
+  {
+    "id": "custom-rule-gemini",
+    "node": "digest_export_(Gemini)",
+    "why": "Copy-paste exporters: the user's own feeds go under Custom Feeds, never another section or EXCLUDED."
+  },
+  {
+    "id": "snippet-length-gemini",
+    "node": "digest_export_(Gemini)",
+    "why": "Copy-paste exporters: 200 characters of story text is too little for a 2-3 sentence or full summary (Zion, 2026-10-26)."
+  },
+  {
+    "id": "entities-gemini",
+    "node": "digest_export_(Gemini)",
+    "why": "Copy-paste exporters: numbered HTML entities (\"Sid Meier&#39;s\") reached the chatbot and its digest."
   }
 ]

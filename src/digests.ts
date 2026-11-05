@@ -12,15 +12,15 @@ export interface DigestRow {
   createdAt: string;
   /** The run's Catch-up range (12h, 24h…), when the digest came from a run. */
   lookback: string | null;
-  /** The grader's score and verdict (pass | attention | fail), when graded. */
-  grade: { score: number; verdict: string } | null;
+  /** The grader's score, verdict (pass | attention | fail) and how many checks failed, when graded. */
+  grade: { score: number; verdict: string; problems: number } | null;
 }
 
 const map = (r: any): DigestRow => ({
   id: r.id, runId: r.run_id, date: r.date, mode: r.mode, content: r.content,
   dryRun: !!r.dry_run, source: r.source, extra: r.extra_json ? JSON.parse(r.extra_json) : null, createdAt: r.created_at,
   lookback: r.lookback ?? null,
-  grade: r.grade_verdict ? { score: r.grade_score, verdict: r.grade_verdict } : null,
+  grade: r.grade_verdict ? { score: r.grade_score, verdict: r.grade_verdict, problems: r.grade_problems ?? 0 } : null,
 });
 
 export function saveDigest(d: { runId?: string | null; date: string; mode: string; content: string; dryRun?: boolean; source?: string; extra?: object }): number {
@@ -30,8 +30,12 @@ export function saveDigest(d: { runId?: string | null; date: string; mode: strin
   return Number(info.lastInsertRowid);
 }
 
+/** Checks the grade failed (skipped ones aren't problems): the Output tab shows "2 problems", not "99/100". */
+const PROBLEMS = "(SELECT count(*) FROM json_each(g.json, '$.checks') c WHERE json_extract(c.value, '$.pass') = 0 AND json_extract(c.value, '$.skipped') IS NULL)";
+
 export function listDigests(limit = 300): DigestRow[] {
-  return db().prepare('SELECT d.*, r.lookback, g.score AS grade_score, g.verdict AS grade_verdict FROM digests d LEFT JOIN runs r ON r.id = d.run_id LEFT JOIN digest_grades g ON g.digest_id = d.id ORDER BY d.date DESC, d.id DESC LIMIT ?').all(limit).map(map);
+  return db().prepare(`SELECT d.*, r.lookback, g.score AS grade_score, g.verdict AS grade_verdict, ${PROBLEMS} AS grade_problems
+    FROM digests d LEFT JOIN runs r ON r.id = d.run_id LEFT JOIN digest_grades g ON g.digest_id = d.id ORDER BY d.date DESC, d.id DESC LIMIT ?`).all(limit).map(map);
 }
 
 export function deleteDigest(id: number): boolean {

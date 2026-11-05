@@ -26,6 +26,8 @@ describe('AI failures in plain words', () => {
     expect(why({ error: 'timed out after 704s — the model was still writing; raise LLM_TIMEOUT_MS' }).what).toBe('took too long to answer');
     expect(why({ error: 'gemini network error: fetch failed' })).toMatchObject({ what: "couldn't be reached", fix: expect.stringMatching(/internet connection/) });
     expect(why({ tier: 'ollama', error: 'ollama unreachable at http://localhost:11434: ECONNREFUSED' }).what).toBe("isn't running on this PC");
+    expect(why({ tier: 'ollama', status: 404, error: `ollama model "smollm2:1.7b" isn't downloaded` })).toMatchObject({ what: "doesn't have smollm2:1.7b downloaded", fix: expect.stringContaining('Local AI') });
+    expect(why({ tier: 'ollama', error: 'too long for smollm2:1.7b: about 30,000 tokens, it reads 8,192' }).what).toBe("can't read a request this long");
     expect(why({ status: 500, error: 'gemini HTTP 500: internal' }).what).toBe('had a server error');
     expect(why({ error: 'got stuck repeating itself (3 broken lines dropped)' }).what).toBe('got stuck repeating itself');
     expect(why({ error: 'something nobody has seen before' }).what).toBe('failed: something nobody has seen before');
@@ -36,7 +38,7 @@ describe('AI failures in plain words', () => {
       'No AI could write the digest:',
       "• Gemini couldn't be reached (try 1), then was overloaded with requests (tries 2–5). That's on Google's side and usually clears up within minutes: run it again later.",
       '• Claude rejected your API key. Enter a new Claude key in AI Writer → API keys.',
-      "• Ollama isn't running on this PC. Start Ollama, or ignore this if you don't use it.",
+      "• Ollama isn't running on this PC. Start it in AI Writer → Local AI, or ignore this if you don't use it.",
     ].join('\n'));
   });
 

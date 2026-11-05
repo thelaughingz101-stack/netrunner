@@ -2,7 +2,10 @@
 import { BUILTIN_FEEDS, SOURCE_MAP, YOUTUBE_AUTHORS, isOfficial, toggleKey, type SourceTag } from '../../catalog/index.js';
 import type { Item, RawArticle } from '../types.js';
 
-const strip = (s?: string) => (s || '').replace(/<[^>]*>/g, '').trim().slice(0, 400);
+/** Story text kept per item: 400 characters for one-sentence summaries; more for 2-3 or full ones, which had too
+ *  little to work from and came out one sentence long (Zion, 2026-10-26). */
+export const textLimit = (summaryLength?: string) => (summaryLength === '2-3' || summaryLength === 'full' ? 900 : 400);
+const strip = (s: string | undefined, max: number) => (s || '').replace(/<[^>]*>/g, '').trim().slice(0, max);
 const domainOf = (url: string) => {
   const m = (url || '').match(/^https?:\/\/([^/?#]+)/i);
   return m ? m[1].replace(/^www\./, '') : '';
@@ -46,7 +49,7 @@ export function tagSource(a: RawArticle): { link: string; src: SourceTag } {
  * ("… restocked at PNP ($64.99) buff.ly/rjq1JsX #ad"), cut at a word near 140 characters.
  */
 export function titleFromText(text: string): string {
-  const line = strip(text).split('\n')
+  const line = strip(text, 400).split('\n')
     .map(l => l.replace(/\bhttps?:\/\/\S+/g, '').replace(/\b[\w-]+(\.[\w-]+)+\/\S*/g, '').replace(/(\s+#\w+)+\s*$/, '').replace(/\s{2,}/g, ' ').trim())
     .find(Boolean) ?? '';
   if (line.length <= 140) return line;
@@ -56,7 +59,7 @@ export function titleFromText(text: string): string {
 
 // n8n also capped each source at 8 here, before the time window; the cap now runs after it and grows with the
 // catch-up range (limits.ts).
-export function normalize(articles: RawArticle[], mode: string): { items: Item[] } {
+export function normalize(articles: RawArticle[], mode: string, maxText = 400): { items: Item[] } {
   const out: Item[] = [];
   for (const a of articles) {
     const { link, src } = tagSource(a);
@@ -69,7 +72,7 @@ export function normalize(articles: RawArticle[], mode: string): { items: Item[]
       title,
       link,
       published: a.isoDate || a.pubDate || a.published || null,
-      summary: strip(a.contentSnippet || a.content || a.summary || a.description || ''),
+      summary: strip(a.contentSnippet || a.content || a.summary || a.description || '', maxText),
       ...(isOfficial(src.name) ? { official: true as const } : {}),
     });
   }

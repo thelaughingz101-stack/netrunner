@@ -239,13 +239,83 @@ describe('providers', () => {
     await expect(claudeProvider(() => refusing as any).call(req, signal)).rejects.toMatchObject({ retryable: false });
   });
 
-  it('ollama: uses the RSS-only prompt for digests and adds the fallback banner', async () => {
-    let sent: any;
-    const p = ollamaProvider((async (_u: string, init: any) => { sent = JSON.parse(init.body); return new Response(JSON.stringify({ response: '## Gaming', done_reason: 'stop' })); }) as unknown as typeof fetch);
-    const out = await p.call(req, signal);
-    expect(sent.prompt).toContain('You have NO internet access');
-    expect(sent.prompt.endsWith('RSS ITEMS:\nUSER')).toBe(true);
-    expect(out.text).toBe('⚠️ FALLBACK DIGEST (Gemini unavailable — RSS only)\n\n## Gaming');
+  describe('ollama', () => {
+    const story = { mode: 'morning', id: 'N001', category: 'Gaming', source: 'PC Gamer', title: 'Valve teases a Steam surprise', link: 'https://x.dev/v', published: null,
+      summary: 'The Half-Life studio has a surprise for Steam users this week. It involves your library, the company said in a post on Tuesday.' };
+    const fake = (answer: string, show: Response | (() => Response) = () => new Response(JSON.stringify({ model_info: { 'llama.context_length': 8192 }, capabilities: ['completion'] }))) => {
+      const sent: { url: string; body: any }[] = [];
+      const f = (async (url: string, init: any) => {
+        sent.push({ url, body: JSON.parse(init.body) });
+        if (url.endsWith('/api/show')) return typeof show === 'function' ? show() : show;
+        return new Response(JSON.stringify({ message: { content: answer } }));
+      }) as unknown as typeof fetch;
+      return { f, sent };
+    };
+    beforeEach(() => setEnvForTests({ OLLAMA_URL: 'http://ollama.test', OLLAMA_MODEL: 'tiny:1b' }));
+
+    it('writes the stories itself, one request each, and says it wrote them on this computer', async () => {
+      const { f, sent } = fake('Valve says Steam users will get a surprise this week that involves their library.');
+      const config = normalizeConfig({ llm: { primary: 'ollama', fallbackChain: ['gemini'] }, format: { summaryLength: '1' } });
+      const out = await ollamaProvider(f).call({ ...req, stories: { items: [story], config } }, signal);
+      expect(sent.map(s => s.url)).toEqual(['http://ollama.test/api/show', 'http://ollama.test/api/chat']);
+      expect(sent[1].body).toMatchObject({ model: 'tiny:1b', stream: false, options: { num_ctx: 4096, temperature: 0.1, num_predict: 70 } });
+      expect(sent[1].body).not.toHaveProperty('think');
+      expect(out.text.split('\n')[0]).toBe('🖥️ Written on this computer by tiny:1b, from your feeds only.');
+      expect(out.text).toContain('## 🎮 Gaming\n- [**Valve teases a Steam surprise**](https://x.dev/v) — Valve says Steam users will get a surprise this week that involves their library. *(PC Gamer)* [#N001]');
+      expect(out.local).toMatchObject({ model: 'tiny:1b', stories: 1, summarized: 1 });
+    });
+
+    it('as a backup it says so, and a missed-stories request gets only their sections', async () => {
+      const config = normalizeConfig({ llm: { primary: 'gemini', fallbackChain: ['ollama'] } });
+      const backup = await ollamaProvider(fake('Valve has a surprise for Steam users this week.').f).call({ ...req, stories: { items: [story], config } }, signal);
+      expect(backup.text.split('\n')[0]).toMatch(/^⚠️ Backup digest: the online AIs couldn't write this, so tiny:1b wrote it/);
+      const recovery = await ollamaProvider(fake('Valve has a surprise for Steam users this week.').f).call({ ...req, kind: 'recovery', stories: { items: [story], config } }, signal);
+      expect(recovery.text.startsWith('## 🎮 Gaming\n')).toBe(true);
+      expect(recovery.text).not.toContain('EXCLUDED');
+    });
+
+    it("tells the chain when it can't help: not running, model not downloaded, a request too long to read", async () => {
+      const down = (async () => { throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } }); }) as unknown as typeof fetch;
+      await expect(ollamaProvider(down).call({ ...req, stories: { items: [story], config: normalizeConfig({}) } }, signal))
+        .rejects.toMatchObject({ retryable: false, message: expect.stringContaining('ECONNREFUSED') });
+      await expect(ollamaProvider(fake('x', () => new Response('{"error":"model not found"}', { status: 404 })).f).call(req, signal))
+        .rejects.toMatchObject({ retryable: false, status: 404, message: 'ollama model "tiny:1b" isn\'t downloaded' });
+      const huge = { ...req, kind: 'rollup' as const, prompt: { ...req.prompt, user: 'x'.repeat(40_000) } };
+      await expect(ollamaProvider(fake('x').f).call(huge, signal)).rejects.toMatchObject({ retryable: false, message: expect.stringMatching(/^too long for tiny:1b/) });
+    });
+
+    it('a thinking model is told not to think', async () => {
+      const { f, sent } = fake('Valve has a surprise for Steam users this week.', () => new Response(JSON.stringify({ capabilities: ['completion', 'thinking'] })));
+      await ollamaProvider(f).call({ ...req, stories: { items: [story], config: normalizeConfig({ format: { summaryLength: '1' } }) } }, signal);
+      expect(sent[1].body.think).toBe(false);
+    });
+  });
+});
+
+describe('an AI that takes one request at a time (Ollama)', () => {
+  it('runs attempts one after another, and time spent waiting its turn is not counted against an attempt', async () => {
+    let busy = 0, most = 0;
+    const order: string[] = [];
+    let queue = Promise.resolve();
+    const slow: Provider = {
+      tier: 'ollama', unavailable: () => null,
+      slot: () => { let release!: () => void; const mine = new Promise<void>(r => { release = r; }); const turn = queue.then(() => release); queue = queue.then(() => mine); return turn; },
+      timeoutMs: () => 400,
+      async call(r, sig) {
+        busy++; most = Math.max(most, busy);
+        await new Promise(res => setTimeout(res, 150));
+        busy--;
+        if (sig.aborted) throw new LLMError('aborted', false);
+        order.push(r.prompt.user);
+        return ok(r.prompt.user);
+      },
+    };
+    const config = cfg('ollama', []);
+    const ask = (user: string) => generate({ ...req, prompt: { ...req.prompt, user } }, config, log, { ...noSleep, timeoutMs: 10, providers: { ollama: slow } });
+    const answers = await Promise.all(['a', 'b', 'c', 'd'].map(ask));
+    expect(answers.map(a => a.text)).toEqual(['a', 'b', 'c', 'd']);
+    expect(most).toBe(1);
+    expect(order).toEqual(['a', 'b', 'c', 'd']);
   });
 });
 

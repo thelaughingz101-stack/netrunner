@@ -11,6 +11,7 @@ import { assignIds, dedupeBullets, forDelivery, stripTags } from './coverage/cov
 import { writeDigest } from './write.js';
 import { gradeDigest, saveGrade } from './grade/index.js';
 import { addMissingOutlets, resolveSearchRedirects } from './links.js';
+import { capSummaries } from './summaries.js';
 import { deliverAll, type DeliveryResult } from './delivery/registry.js';
 import type { DeliveryTarget } from './delivery/types.js';
 import { ingest } from './ingest/index.js';
@@ -127,14 +128,16 @@ export function run(opts: RunOptions): Promise<RunOutcome> {
   });
 }
 
-/** Manual mode ("Generate Prompt"), regardless of llm.mode. */
-export function runPrompt(opts: RunOptions) {
-  return exclusive(`${opts.trigger}:prompt`, async () => {
-    const { config } = getConfig();
-    const decision = resolveMode(config, { lookbackWindow: opts.lookbackWindow, forceMode: opts.forceMode === 'morning' || opts.forceMode === 'nightly' ? opts.forceMode : undefined }, opts.now);
-    if (decision.skip) throw new Error(decision.reason);
-    return promptRun(decision.mode, decision.lookbackWindow, opts);
-  });
+/**
+ * Manual mode ("Generate Prompt"), regardless of llm.mode. It doesn't take the run lock: it only reads the feeds
+ * and saves a prompt (no AI, no delivery, no story tracker), so it can run while a digest is being written
+ * (Zion, 2026-10-26: Generate Prompt failed with no reason while an Autopilot run was going).
+ */
+export async function runPrompt(opts: RunOptions) {
+  const { config } = getConfig();
+  const decision = resolveMode(config, { lookbackWindow: opts.lookbackWindow, forceMode: opts.forceMode === 'morning' || opts.forceMode === 'nightly' ? opts.forceMode : undefined }, opts.now);
+  if (decision.skip) throw new Error(decision.reason);
+  return promptRun(decision.mode, decision.lookbackWindow, opts);
 }
 
 async function guarded<T>(ctx: RunContext, fn: () => Promise<T & { llmTier?: string }>): Promise<T> {
@@ -172,8 +175,14 @@ async function digestRun(mode: Mode, lookbackWindow: string, opts: RunOptions): 
     ctx.stats.continuity = { morningDigestFound: !!morningDigest, developingStories: developing.length };
 
     const written = await writeDigest(ctx, { mode, items, morningDigest, developing }, engine);
+    // For the grader: did the stories from the user's own feeds make it in?
+    const custom = items.filter(i => i.category === 'Custom Feeds');
+    if (custom.length) ctx.stats.customFeeds = { stories: custom.length, excluded: custom.filter(i => written.placements.get(i.id!) === 'excluded').length };
     // Repeated bullets come from an AI stuck in a loop; drop them whatever the run size.
-    const deduped = dedupeBullets(stripTags(written.digest)).md;
+    // ...and summaries longer than Format → Summary length allows are cut at a sentence end.
+    const capped = capSummaries(dedupeBullets(stripTags(written.digest)).md, config.format.summaryLength);
+    if (capped.cut) ctx.stats.summariesCut = capped.cut;
+    const deduped = capped.md;
     // Search results' Google redirect links → the articles' own; linked stories with no outlet get one.
     if (/vertexaisearch\.cloud\.google\.com/.test(deduped)) ctx.progress?.('Finding the real links for search results');
     const searched = await resolveSearchRedirects(deduped);
@@ -208,8 +217,8 @@ async function digestRun(mode: Mode, lookbackWindow: string, opts: RunOptions): 
 
 async function promptRun(mode: Mode, lookbackWindow: string, opts: RunOptions) {
   const { config } = getConfig();
+  // No progress on the lock row: that row belongs to whichever digest is running (see runPrompt).
   const ctx = createRun({ config, mode, lookbackWindow, dryRun: !!opts.dryRun, trigger: opts.trigger, kind: 'prompt', now: opts.now });
-  track(ctx, 'Copy-paste prompt');
   return guarded(ctx, async () => {
     const { items } = await ingest(ctx, { fetchText: opts.fetchText, tries: opts.feedTries });
     ctx.progress?.('Building the prompt');

@@ -2,7 +2,7 @@
 
 **NetRunner reads ~160 news sites, YouTube channels and subreddits for you and turns them into one short, organised news digest, on a schedule, delivered to Discord, email or a file.**
 
-You pick the topics and sources. An AI (Google Gemini, Claude, or a local Ollama model) writes the digest. If you don't want to use an AI key, NetRunner can instead prepare a ready-to-paste prompt for ChatGPT, Claude, Gemini, Grok or DeepSeek.
+You pick the topics and sources. An AI (Google Gemini, Claude, or a free model on your own computer through Ollama) writes the digest. If you don't want to use an AI key, NetRunner can instead prepare a ready-to-paste prompt for ChatGPT, Claude, Gemini, Grok or DeepSeek.
 
 ---
 
@@ -57,11 +57,20 @@ You never need to edit a file by hand. Everything is typed into the app, and sav
 |---|---|---|
 | **Gemini API key** | AI Writer → API keys | [aistudio.google.com](https://aistudio.google.com) → **Get API key**. Recommended, and it has a free tier. |
 | **Claude API key** | AI Writer → API keys | [console.anthropic.com](https://console.anthropic.com) → **API Keys** |
-| **Ollama address** | AI Writer → API keys | Only if you run Ollama on your PC. Usually leave it as `http://localhost:11434`. |
+| **Local AI** | AI Writer → Local AI | No key. Install [Ollama](https://ollama.com/download), then the app starts it, downloads a model and tests it (see below). |
 | **Discord webhook URL** | Delivery → Discord | In Discord: **Server Settings → Integrations → Webhooks → New Webhook**, pick a channel, **Copy Webhook URL**. |
 | **Email settings** (server, port, username, password) | Delivery → Email → Sending account | For Gmail: server `smtp.gmail.com`, port `465`, your Gmail address, and an **App Password** (Google Account → Security → App passwords), not your normal password. |
 
 You only need a key for the AI you actually use. Changes take effect immediately, no restart needed.
+
+### Writing the digest on your own computer (free, private)
+
+1. Install [Ollama](https://ollama.com/download).
+2. In NetRunner: **AI Writer → Primary model → Ollama**. The **Local AI** card shows whether Ollama is running (**Start Ollama** if not).
+3. Under **Download a model**, pick one. **SmolLM2 1.7B** (1.1 GB) is the quickest and fine on an 8 GB laptop; the 3B and 4B models write better and run slower. Pick the one to use under **Model NetRunner uses** (the first one you download is picked for you).
+4. Press **Test**: it summarizes two sample stories and times the model. The time forecast next to **Run News Digest** then uses that speed.
+
+A local model can't search the web, so topics that only come from searches (Blindspot Analysis, and any topic your feeds had nothing for) are left out, and the grader's AI checks need Gemini or Claude. Small models can't read a whole digest's worth of stories either, so NetRunner builds the digest itself and the model only shortens each story's text, one story at a time. It works the same when Ollama is a backup further down the chain.
 
 ### What each tab does
 
@@ -69,12 +78,12 @@ You only need a key for the AI you actually use. Changes take effect immediately
 |---|---|
 | **Start** | Starting points: *Everything on*, *Official only* (government agencies, public bodies and nonprofits) and *Start fresh*. They set topics and sources; your schedule, delivery, AI and Format settings stay. The one matching your settings is marked *Current*. Also export/import of your settings. |
 | **Topics** | Which topics appear. The **Catch-all sections** card at the bottom switches the *Everything Else* and *Excluded list* sections on or off. |
-| **Sources** | *Feed health* at the top lists feeds that are failing or empty two runs in a row, or quiet for two weeks, with a button to switch each off. Below it, individual sites, channels and Bluesky accounts per topic, with full names (e.g. *Centers for Disease Control and Prevention (CDC)*). Search by name, or show *Official bodies only* (marked ✦). *Skip filler* drops YouTube Shorts and promo clips. *Add your own* takes any RSS feed, YouTube channel or Bluesky account (checked with Bluesky before it's added). |
-| **Format** | Summary length (1 sentence, 2–3, or full), digest size (Full, or Light: about half the stories per topic), language, and section order. |
-| **AI Writer** | Autopilot or Free Copy-Paste, which AI to use first, backups if it fails, your keys, and the *Grader* (grade each digest, on by default). |
+| **Sources** | *Feed health* at the top lists feeds that are failing or empty two runs in a row, or quiet for two weeks, with a button to switch each off. Below it, individual sites, channels and Bluesky accounts per topic, with full names (e.g. *Centers for Disease Control and Prevention (CDC)*). Search by name, or show *Official bodies only* (marked ✦). *Skip filler* drops YouTube Shorts and promo clips. *Add your own* takes any RSS feed (or a site's address: its feed is found for you), YouTube channel or Bluesky account, each checked before it's added and shown with its name and picture. Their stories always go under *Custom Feeds*. |
+| **Format** | Summary length (1 sentence, 2–3, or full: a longer summary is cut to it at a sentence end; a shorter one stays when the feed says no more), digest size (Full, or Light: about half the stories per topic), language, and section order. |
+| **AI Writer** | Autopilot or Free Copy-Paste, which AI to use first, backups if it fails, your keys, the *Local AI* card, and the *Grader* (grade each digest, on by default). In Autopilot you can still make a copy-paste prompt any time, even while a digest is being written. |
 | **Schedule** | Turn automatic digests on or off, times, timezone, how far back to look, and weekly/monthly recaps. How far back to look also sets how much goes in: longer ranges take more stories per source and per topic (12 hours: 8 per source and 25 per topic, up to 1 month: 50 and 80), keeping the stories the most outlets covered, then the newest. |
 | **Delivery** | Discord, email, save to file, and *Open in NetRunner* (opens the app on each new scheduled digest). |
-| **Output** | Every digest NetRunner has made, ready to read, with its grade (*Pass*, *Needs attention* or *Fail*, out of 100): click it to see every check and the lines it flagged, or *Grade this digest* for older ones. Search box: every saved digest that mentions a word, with the matching lines (highlighted in the digest). Click a topic's header to fold it away (*Collapse all* / *Expand all* do every topic); NetRunner remembers what you folded. |
+| **Output** | Every digest NetRunner has made, ready to read, with its grade (*No problems found*, or how many problems; a serious one is marked): click it to see every check, problems first, and the lines it flagged, or *Grade this digest* for older ones. Search box: every saved digest that mentions a word, with the matching lines (highlighted in the digest). Click a topic's header to fold it away (*Collapse all* / *Expand all* do every topic); NetRunner remembers what you folded. |
 
 The bar at the bottom has **Run News Digest**, **Undo changes** and **Save**. Save lights up (and *Unsaved changes* shows) only when something on screen differs from your saved settings. Under the Run button, a rough forecast for the settings on screen (*≈ 420 stories · about 9 min*), from your last few runs. While a digest runs, from the button or the schedule, hover **Running…** to see what it's doing (e.g. *Fetching sources (64 of 112)*, *Writing the digest with Gemini*).
 
@@ -125,7 +134,7 @@ On Windows, the secrets (`GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, `DISCORD_WEBHOOK
 |---|---|
 | Gemini API key | `GEMINI_API_KEY` (model: `GEMINI_MODEL`) |
 | Claude API key | `ANTHROPIC_API_KEY` (model: `CLAUDE_MODEL`) |
-| Ollama address | `OLLAMA_URL` (model: `OLLAMA_MODEL`) |
+| Local AI: Ollama address, model | `OLLAMA_URL`, `OLLAMA_MODEL` |
 | Discord webhook URL | `DISCORD_WEBHOOK_URL` |
 | Email sending account | `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`, `EMAIL_FROM`, `EMAIL_TO` |
 | (not in the app) | `PORT`, `HOST`, `ALLOWED_HOSTS`, `DATA_DIR`, `SCHEDULER`, `LOG_LEVEL`, timeouts, `LEGACY_CONFIG_PATH`, `LLM_ITEMS_PER_CALL` (more stories than this in one run, default 150: the digest is written in a few evenly sized AI calls of whole topics, 3 at a time, then stitched together) |
@@ -173,6 +182,10 @@ trigger (schedule | Run button | CLI)
   → tag sources → time window + per-source cap → dedupe → same-story clustering (an official body's item
     leads the story) → topic toggles → per-topic cap → Google News links swapped for the publishers' own
   → [Autopilot] assign IDs N001… → prompt (+ ID rule) → Gemini → Claude → Ollama
+        (Ollama, wherever it is in the chain: no prompt. Sections, headlines, links and outlets come from the feeds;
+         the model shortens each story's text, one story and one request at a time. A story with no text keeps its
+         headline, one short sentence is used as is, and an answer with a number or too many words the story
+         doesn't have is swapped for the story's own opening sentence)
         (over LLM_ITEMS_PER_CALL stories: a few calls of whole topics, 3 at a time, stitched in section order;
          no AI call starts after RUN_DEADLINE_MS, 100 min: topics not written by then are listed plainly)
         → an answer stuck repeating itself: broken lines dropped, asked once more, then the next AI
@@ -183,7 +196,7 @@ trigger (schedule | Run button | CLI)
   → save digest → story tracker → Discord / Email / File (minus hidden sections)
   → grade it (read-only): code checks (switched-off topics, repeats, links, outlets, filtered clips, coverage…)
     then one AI request judging four criteria separately (same story twice, wrong section, unattributed claims, filler), preferring
-    a different AI from the writer; the score and every flagged line are saved for the Output tab
+    a different AI from the writer, never a local one; the score and every flagged line are saved for the Output tab
 ```
 
 Every run writes a structured record: feeds fetched, empty and failed; items dropped at each stage; which AI answered and every attempt; coverage per round; and each delivery's status. Find it in `GET /api/runs`, `GET /api/runs/<id>`, and `data/logs/netrunner.log` (JSON lines, one `runId` per run).

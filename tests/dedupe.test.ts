@@ -63,6 +63,22 @@ describe('Same-Story Clustering (port of the n8n node)', () => {
     ]);
     expect(merged).toBe(0);
   });
+
+  it("never merges two pages from one outlet's own site (look-alike titles); its article + its video still merge", () => {
+    const site = (path: string) => `https://thegamingemporium.com/game/${path}`;
+    expect(clusterSameStory([
+      item({ source: 'thegamingemporium.com', category: 'Custom Feeds', title: 'Until Dawn PC Port', link: site('until-dawn') }),
+      item({ source: 'thegamingemporium.com', category: 'Custom Feeds', title: 'Crystal Defenders PC Port', link: site('crystal-defenders') }),
+    ]).merged).toBe(0);
+    expect(clusterSameStory([
+      item({ source: 'IGN', title: 'Rockstar reveals Grand Theft Auto trailer date', link: 'https://www.ign.com/articles/gta' }),
+      item({ source: 'IGN', title: 'Grand Theft Auto trailer date revealed by Rockstar', link: 'https://www.youtube.com/watch?v=x' }),
+    ]).merged).toBe(1);
+    expect(clusterSameStory([
+      item({ source: 'Reddit r/games', title: 'Rockstar reveals Grand Theft Auto trailer date', link: 'https://www.reddit.com/r/Games/1' }),
+      item({ source: 'Reddit r/games', title: 'Grand Theft Auto trailer date revealed by Rockstar', link: 'https://www.reddit.com/r/Games/2' }),
+    ]).merged).toBe(1);
+  });
 });
 
 describe('Cross-category merging (new; not in n8n)', () => {

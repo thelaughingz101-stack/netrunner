@@ -213,6 +213,11 @@ describe('Output search and the run forecast', () => {
     expect(some.stories).toBeGreaterThanOrEqual(6);
     expect(estimateRun(config({ format: { digestSize: 'light' } }))!.stories).toBeLessThan(all.stories);
     expect(all.minutes).toBe(Math.round(all.stories * 10 / 40));
+    // A longer range than the runs covered: more stories (up to the caps), and more minutes.
+    const week = estimateRun(config({ schedule: { lookbackWindow: '1w' } }))!;
+    expect(week.stories).toBeGreaterThan(all.stories);
+    expect(week.minutes).toBeGreaterThan(all.minutes);
+    expect(estimateRun(config({ schedule: { lookbackWindow: '24h' } }))!.stories).toBeGreaterThan(all.stories);
   });
 });
 

@@ -191,6 +191,20 @@ export function topicsWritten({ parsed, runStats }: CheckInput): CheckResult {
     summary: failed.length ? `Listed as plain headlines (the AI couldn't write them): ${failed.join(', ')}` : 'The AI wrote every topic', evidence: failed });
 }
 
-export const CODE_CHECKS = [sectionsOn, sectionOrder, catchAll, repeats, leftoverTags, loops, complete, filtered, links, sourcesNamed, officialFirst, coverage, topicsWritten];
+/**
+ * The feeds the user added themselves are in the digest, not dropped as filler. On 2026-10-26 Gemini put all 31
+ * stories from Zion's own game feed in EXCLUDED ("filler") and the grade still said 99/100. A duplicate of a
+ * story told elsewhere may be left out, hence the allowance.
+ */
+export function customFeedsShown({ runStats }: CheckInput): CheckResult {
+  const id = 'custom-feeds', name = 'Your own feeds are in the digest', weight = 2;
+  const c = runStats?.customFeeds;
+  if (!c?.stories) return skipped(id, name, weight, 'No stories from your own feeds in this run');
+  const shown = c.stories - c.excluded;
+  return result({ id, name, weight, score: shown / c.stories, pass: c.excluded <= Math.max(1, Math.floor(c.stories * 0.2)),
+    summary: c.excluded ? `${c.excluded} of ${c.stories} stories from your own feeds were left out (EXCLUDED)` : `All ${c.stories} stories from your own feeds are in` });
+}
+
+export const CODE_CHECKS = [sectionsOn, sectionOrder, catchAll, repeats, leftoverTags, loops, complete, filtered, links, sourcesNamed, officialFirst, coverage, topicsWritten, customFeedsShown];
 
 export const runCodeChecks = (input: CheckInput): CheckResult[] => CODE_CHECKS.map(check => check(input));

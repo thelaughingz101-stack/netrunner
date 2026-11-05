@@ -154,8 +154,14 @@ describe('AI graders', () => {
 
   it('prefers a different AI from the one that wrote the digest', () => {
     const cfg = normalizeConfig({ llm: { primary: 'gemini', fallbackChain: ['claude', 'ollama'] } });
-    expect(graderConfig(cfg, 'gemini').llm).toMatchObject({ primary: 'claude', fallbackChain: ['ollama', 'gemini'] });
-    expect(graderConfig(cfg).llm).toMatchObject({ primary: 'gemini' });
+    expect(graderConfig(cfg, 'gemini')!.llm).toMatchObject({ primary: 'claude', fallbackChain: ['gemini'] });
+    expect(graderConfig(cfg)!.llm).toMatchObject({ primary: 'gemini' });
+  });
+
+  it('never grades with a local model (none left: null, and the AI checks are skipped)', () => {
+    const local = normalizeConfig({ llm: { primary: 'ollama', fallbackChain: ['gemini', 'claude'] } });
+    expect(graderConfig(local, 'ollama')!.llm).toMatchObject({ primary: 'gemini', fallbackChain: ['claude'] });
+    expect(graderConfig(normalizeConfig({ llm: { primary: 'ollama', fallbackChain: [] } }), 'ollama')).toBeNull();
   });
 
   it('grades a digest end to end, read-only, and keeps the report', async () => {

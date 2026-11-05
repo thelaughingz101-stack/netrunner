@@ -71,7 +71,9 @@ describe('Manual-mode exporters', () => {
       'in its single best-fit section (or 📋 Everything Else), naming every outlet that covered it, e.g. *(Eurogamer, Kotaku)*. '
         + 'OFFICIAL SOURCES: feed items marked [official] come straight from a government agency, public body or nonprofit institution (the FDA, the Federal Reserve, the UN…). '
         + 'When one covers a story, report what that body itself said, link its item, and name it first; outlets that covered the same story add context. Every other appearance',
-    ).replace('  return { title, url, source, snippet };', '  return { title, url, source: it.official && source ? `${source} [official]` : source, snippet };');
+    ).replace('  return { title, url, source, snippet };', "  return { title, url, source: it.official && source ? `${source} [official]` : it.category === 'Custom Feeds' && source ? `${source} [custom feed]` : source, snippet };")
+      .replace('(cfg?.customSources?.xcancel || []).length) > 0;', '(cfg?.customSources?.bluesky || []).length) > 0;')
+      .replace(".replace(/&[a-z]+;/gi, ' ')", ".replace(/&#(\\d+);/g, (_, n) => String.fromCodePoint(Number(n))).replace(/&amp;/gi, '&').replace(/&[a-z]+;/gi, ' ')");
     expect(gen).toContain(original.slice(0, original.indexOf("const TZ = 'America/New_York';")));
     expect(gen).toContain(original.slice(original.indexOf('SUMMARIES: 2–3 sentences each, no filler.') + 'SUMMARIES: 2–3 sentences each, no filler.'.length));
   });
@@ -86,6 +88,15 @@ describe('Manual-mode exporters', () => {
       expect(prompt('1')).not.toContain('2–3 sentences each');
     });
   }
+
+  it("marks the user's own feeds, which always go under Custom Feeds (2026-10-26: excluded as filler, or spread over Gaming)", () => {
+    const own = { mode: 'morning', source: 'thegamingemporium.com', category: 'Custom Feeds', title: 'Until Dawn PC Port', link: 'https://thegamingemporium.com/game/until-dawn', published: null, summary: 'Sid Meier&#39;s port' };
+    const config = normalizeConfig({ delivery: { chatbotPlatform: 'claude' }, customSources: { bluesky: [{ did: 'did:plc:x', handle: 'x.bsky.social', title: null, avatar: null }] } });
+    const out = buildManualPrompt({ mode: 'morning', items: [own], morningDigest: '' }, config, '2026-10-26');
+    expect(out.digest).toContain('Until Dawn PC Port | thegamingemporium.com [custom feed]');
+    expect(out.digest).toContain("Sid Meier's port");
+    expect(out.digest).toContain('every feed item marked [custom feed] goes here'); // a Bluesky-only custom list counts now
+  });
 
   it('falls back to the ChatGPT exporter for retired platforms (n8n Switch fallback)', () => {
     const out = buildManualPrompt({ mode: 'morning', items, morningDigest: '' }, normalizeConfig({ delivery: { chatbotPlatform: 'notebooklm' } }), '2026-10-08');

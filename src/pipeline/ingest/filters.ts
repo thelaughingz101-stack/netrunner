@@ -195,16 +195,36 @@ const PROMO_PATTERNS: RegExp[] = [
 export const isPromotionalTitle = (title: string) => PROMO_PATTERNS.some(re => re.test(title));
 export const isShort = (link: string, title: string) => link.includes('/shorts/') || /#shorts\b/i.test(title);
 
+// Pages that aren't stories: the Google News "site:" feeds for official bodies also return a site's search,
+// data, shop and login pages. Every one of these reached a digest in 2026-10 (World Bank indicator pages, an
+// OECD PISA test question, a CFR store login, Supreme Court search, FDIC BankFind, a SAMHSA dashboard).
+const NOT_A_STORY_URL = [
+  /\/search(?:\.aspx)?(?:[?/#]|$)/i, /\/(?:cart|checkout|login|signin|sign-in)\b/i, /customer_authentication/i,
+  /\.(?:csv|xlsx?|zip|json)(?:[?#]|$)/i, /\/wiki\/(?:Category|Special|Wikipedia|Portal|Template):/i,
+  /data\.worldbank\.org\/indicator\//i, /\/datamapper\//i, /bankfind/i, /grants-dashboard/i, /GetStateContactReport/i,
+  /pisa\d*-questions\.oecd\.org/i, /\/home\/main\/home/i,
+];
+// A title that is only the site's name ("- SAMHSA (.gov)", "Search - Supreme Court…", "All Actions - Congress.gov").
+const NOT_A_STORY_TITLE = /^\s*(?:[-–|]|(?:Search|All Actions|Home)\s+[-–|]|Category:)/i;
+
+export const isNotAStory = (link: string, title: string) => NOT_A_STORY_TITLE.test(title) || NOT_A_STORY_URL.some(re => re.test(link));
+
 /** Drops YouTube Shorts and/or promotional items per config.filters. Runs on raw articles, before the per-source cap. */
 export function contentFilter<T extends { title?: string; link?: string; guid?: string; url?: string }>(articles: T[], config: Config) {
   const { shorts, promotional } = config.filters;
   let droppedShorts = 0;
   let droppedPromo = 0;
+  let droppedPages = 0;
+  // The user's own feeds are theirs to judge (fmhy.net's "How-to Search FMHY" lives at /posts/search).
+  const cs = config.customSources;
+  const own = new Set(['Custom RSS', 'Custom YouTube', ...(cs?.youtube ?? []).map(e => (typeof e === 'object' ? e?.handle : null)).filter(Boolean) as string[],
+    ...(cs?.bluesky ?? []).map(b => `@${b.handle}`)]);
   const kept = articles.filter(a => {
     const title = a.title || '';
+    if (!own.has((a as { _feed?: string })._feed ?? '') && isNotAStory(a.link || a.guid || a.url || '', title)) { droppedPages++; return false; }
     if (shorts && isShort(a.link || a.guid || a.url || '', title)) { droppedShorts++; return false; }
     if (promotional && isPromotionalTitle(title)) { droppedPromo++; return false; }
     return true;
   });
-  return { articles: kept, droppedShorts, droppedPromo };
+  return { articles: kept, droppedShorts, droppedPromo, droppedPages };
 }

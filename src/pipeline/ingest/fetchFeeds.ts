@@ -34,6 +34,19 @@ const defaultFetchText: FetchText = async (url, timeoutMs, headers = {}) => {
   };
 };
 
+/**
+ * Parses a feed; one with a stray "&" (not part of an entity) gets it escaped and is parsed again. Rest of World's
+ * feed failed every run for that ("Invalid character in entity name", 2026-10).
+ */
+export async function parseLenient(text: string) {
+  try {
+    return await parser.parseString(text);
+  } catch (e) {
+    if (!/entity/i.test((e as Error).message)) throw e;
+    return parser.parseString(text.replace(/&(?!#\d+;|#x[\da-f]+;|[a-z][a-z\d]*;)/gi, '&amp;'));
+  }
+}
+
 /** The "changed since?" headers for a feed we have a saved answer for. */
 const conditional = (c: CachedFeed | undefined): Record<string, string> | undefined => {
   if (!c || (!c.etag && !c.lastModified)) return undefined;
@@ -61,7 +74,7 @@ async function fetchOne(feed: FeedToFetch, fetchText: FetchText, timeoutMs: numb
       const unchanged = res.status === 304 && !!cached;
       if (res.status >= 400 || (res.status === 304 && !cached)) throw new HttpError(res.status, res.retryAfterSec);
       const text = unchanged ? cached!.body : res.text;
-      const parsed = await parser.parseString(text);
+      const parsed = await parseLenient(text);
       if (unchanged) cache!.touch(feed.url);
       else if (cache && (res.etag || res.lastModified)) cache.put(feed.url, { etag: res.etag, lastModified: res.lastModified, body: text });
       return { items: (parsed.items || []).map(i => ({ ...(i as RawArticle), _feed: feed.name })), unchanged };

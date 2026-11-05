@@ -127,7 +127,7 @@ describe('catalog additions and fixes', () => {
     expect(tagSource({ link: 'https://www.gov.uk/government/news/x', _feed: 'UK AISI' }).src).toEqual({ name: 'UK AISI', category: 'AI & LLMs' });
     expect(tagSource({ link: 'https://www.gov.uk/government/news/x', _feed: 'Custom RSS' }).src.category).toBe('Custom Feeds');
     expect(tagSource({ link: 'https://www.federalregister.gov/documents/2026/10/22/x', _feed: 'Federal Register Significant Rules' }).src).toEqual({ name: 'Federal Register', category: 'US Politics' });
-    expect(uiCatalog().sources['Weather & Disasters']).toEqual({ RSS: ['NWS', 'NHC', 'USGS Earthquakes', 'FEMA'] });
+    expect(uiCatalog().sources['Weather & Disasters']).toEqual({ RSS: ['NWS', 'NHC', 'USGS Earthquakes'] });
   });
 
   it('retries rate limits and YouTube 404 blips, but not ordinary 404s', () => {

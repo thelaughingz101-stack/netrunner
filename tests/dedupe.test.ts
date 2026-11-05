@@ -147,3 +147,21 @@ describe('Cross-category merging (new; not in n8n)', () => {
     expect(merged).toBe(0);
   });
 });
+
+describe('pages that are not stories', () => {
+  it('drops search, data, shop and login pages and site-name-only titles; keeps real stories', async () => {
+    const { isNotAStory } = await import('../src/pipeline/ingest/filters.js');
+    const junk: [string, string][] = [
+      ['https://data.worldbank.org/indicator/NY.GDP.MKTP.KD.ZG?locations=IS-FO', 'GDP growth (annual %) - Iceland - World Bank Open Data'],
+      ['https://www.supremecourt.gov/search.aspx?filename=/docketfiles/10-8802.htm', 'Search - Supreme Court of the United States (.gov)'],
+      ['https://store.cfr.org/customer_authentication/redirect?locale=en', 'Council on Foreign Relations'],
+      ['https://www.opensecrets.org/industries.csv', 'OpenSecrets'],
+      ['https://en.wikipedia.org/wiki/Category:Sweden_Democrats_politician_stubs', 'Category:Sweden Democrats politician stubs - Wikipedia'],
+      ['https://www.samhsa.gov/grants/grants-dashboard?f=1', ' - SAMHSA (.gov)'],
+      ['https://www.congress.gov/bill/119th-congress/senate-bill/4378/all-actions', 'All Actions - Congress.gov - Congress.gov'],
+    ];
+    for (const [link, title] of junk) expect(isNotAStory(link, title), title).toBe(true);
+    expect(isNotAStory('https://www.nasa.gov/missions/artemis/lander', 'NASA, Partners Accelerate Lander Development')).toBe(false);
+    expect(isNotAStory('https://www.reuters.com/world/search-for-survivors-continues-2026-11-05/', 'Search for survivors continues after quake')).toBe(false);
+  });
+});

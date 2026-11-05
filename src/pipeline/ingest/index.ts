@@ -70,6 +70,7 @@ export async function ingest(ctx: RunContext, opts: { fetchText?: FetchText; tri
     articlesFetched: articles.length,
     droppedShorts: cf.droppedShorts,
     droppedPromotional: cf.droppedPromo,
+    droppedNotStories: cf.droppedPages,
     droppedPerSourceCap: cap.capped,
     droppedOutsideWindow: win.dropped,
     windowFallbackUsed: win.usedFallback,

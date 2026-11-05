@@ -33,6 +33,13 @@ export const FEED_OVERRIDES: Record<string, Partial<FeedDef> | null> = {
   'Ars Technica':      { url: 'https://feeds.arstechnica.com/arstechnica/index' },
   'BBC World News':    { url: 'https://feeds.bbci.co.uk/news/world/rss.xml' },
   'Politico Congress': { url: 'https://rss.politico.com/congress.xml' },
+  // Feed review, 2026-11-05 (the last 8 runs): dead, broken, or mostly thrown out by the AI.
+  'Hacker News':  { url: 'https://hnrss.org/frontpage' },              // news.ycombinator.com answered 419 in 5 of 6 runs
+  'NY Post':      { url: 'https://nypost.com/politics/feed/' },        // the main feed is mostly sports and celebrity (11 of 27 thrown out)
+  'CBR Comics':   { url: 'https://www.cbr.com/feed/category/comics/' }, // the main feed is film listicles (18 of 24 thrown out)
+  'Wikipedia Current Events (history)': null,                        // page-edit history, nothing since 2024
+  'Wikipedia Current Events (Google proxy)': null,                   // category and history pages: 16 of 16 thrown out
+  'Giant Freakin Robot': null,                                       // film listicles, never a leak or rumor: 15 of 15 thrown out
 };
 
 /**
@@ -95,7 +102,6 @@ export const SOURCE_LABELS: Record<string, string> = {
   'NWS':             'National Weather Service (NWS) Extreme Alerts',
   'NHC':             'National Hurricane Center (NHC)',
   'USGS Earthquakes': 'U.S. Geological Survey (USGS) Significant Earthquakes',
-  'FEMA':            'Federal Emergency Management Agency (FEMA)',
   'GAO':             'U.S. Government Accountability Office (GAO)',
   'CBO':             'Congressional Budget Office (CBO)',
   'Supreme Court':   'Supreme Court of the United States (SCOTUS)',
@@ -134,7 +140,9 @@ export const SOURCE_LABELS: Record<string, string> = {
 const yt = (id: string) => `https://www.youtube.com/feeds/videos.xml?channel_id=${id}`;
 const gh = (repo: string) => `https://github.com/${repo}/releases.atom`;
 /** Google News search for one site's last day, for sites whose own feed is dead or blocked. */
-const gn = (site: string) => `https://news.google.com/rss/search?q=site:${site}+when:1d&hl=en-US&gl=US&ceid=US:en`;
+// A week, not a day: these bodies post a few times a week, so a day often came back empty (NIST, ENISA, JPL,
+// Rockstar every run, 2026-10). The run's own time window still keeps only what's inside the catch-up range.
+const gn = (site: string) => `https://news.google.com/rss/search?q=site:${site}+when:7d&hl=en-US&gl=US&ceid=US:en`;
 /** A Bluesky account's posts (Bluesky serves RSS for every profile). */
 const bsky = (handle: string) => `https://bsky.app/profile/${handle}/rss`;
 
@@ -226,7 +234,6 @@ export const EXTRA_FEEDS: FeedDef[] = [
   { name: 'Ship of Harkinian Releases', category: 'Gaming', type: 'rss', url: gh('HarbourMasters/Shipwright') },
   { name: 'OpenGOAL Releases', category: 'Gaming', type: 'rss', url: gh('open-goal/jak-project') },
   { name: 'ModDB',             category: 'Gaming', type: 'rss', url: 'https://rss.moddb.com/news/feed/rss.xml' },
-  { name: 'GBAtemp',           category: 'Gaming', type: 'rss', url: 'https://gbatemp.net/forums/-/index.rss' },
   { name: 'Time Extension',    category: 'Gaming', type: 'rss', url: 'https://www.timeextension.com/feeds/latest' },
 
   // 💻 TECH — self-hosting, Android root & modding
@@ -284,7 +291,6 @@ export const EXTRA_FEEDS: FeedDef[] = [
   { name: 'NHC Atlantic',    sourceKey: 'NHC', category: 'Weather & Disasters', type: 'rss', url: 'https://www.nhc.noaa.gov/index-at.xml' },
   { name: 'NHC Eastern Pacific', sourceKey: 'NHC', category: 'Weather & Disasters', type: 'rss', url: 'https://www.nhc.noaa.gov/index-ep.xml' },
   { name: 'USGS Earthquakes', category: 'Weather & Disasters', type: 'rss', url: 'https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/significant_week.atom' },
-  { name: 'FEMA',            category: 'Weather & Disasters', type: 'rss', url: 'https://www.fema.gov/feeds/news.rss' },
 
   // 🏛️ US POLITICS
   { name: 'Federal Register Presidential Documents', sourceKey: 'Federal Register', category: 'US Politics', type: 'rss', url: 'https://www.federalregister.gov/api/v1/documents.rss?conditions%5Btype%5D%5B%5D=PRESDOCU' },
@@ -455,7 +461,7 @@ export const OFFICIAL_SOURCES = new Set<string>([
   'FTC Consumer Alerts', 'Citizen Lab',
   'EMA', 'UKHSA', 'Health Canada', 'USDA FSIS', 'CPSC', 'CMS', 'SAMHSA', 'Cochrane', 'KFF Health News',
   'ESA', 'NOAA', 'NSF', 'NASA JPL', 'NIST', 'Science (AAAS)', 'Smithsonian Magazine', 'National Academies',
-  'NWS', 'NHC', 'USGS Earthquakes', 'FEMA',
+  'NWS', 'NHC', 'USGS Earthquakes', 'FEMA', // FEMA: its feed 404s since 2026-10 and Google News has nothing; tagging only
   'Federal Register', 'GAO', 'CBO', 'Congress.gov', 'Supreme Court', 'OpenSecrets', 'FactCheck.org', 'Ballotpedia', 'ProPublica',
   'UN News', 'ReliefWeb', 'State Department', 'European Commission', 'NATO', 'ICRC', 'Human Rights Watch', 'Amnesty International', 'CFR',
   'Federal Reserve', 'SEC', 'BLS', 'BEA', 'Treasury', 'FTC', 'CFPB', 'FDIC', 'IMF', 'World Bank', 'OECD', 'ECB', 'Bank of England', 'Brookings', 'NBER',

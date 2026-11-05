@@ -1301,7 +1301,7 @@ function LLMTab({config, update, updateLLMPrimary, runForPrompt, promptResult, p
           {primary !== "ollama" && <LocalAiCard primary={primary} />}
           <div style={s.card}>
             <SectionTitle hint="read-only: it never changes a digest">Grader</SectionTitle>
-            <Row label="Grade each digest" sub="After each digest is sent, NetRunner checks it: repeated stories, switched-off topics, missing links and outlets, filtered clips, and (with a second AI, a different one from the writer when you have its key) stories told twice, in the wrong section, unattributed rumors, and filler. The grade and every problem it found show on the Output tab. Costs one AI request per digest. A local model doesn't grade: those checks need Gemini or Claude.">
+            <Row label="Grade each digest" sub="After each digest is sent, NetRunner checks it: repeated stories, switched-off topics, missing links and outlets, filtered clips, and (with a second AI, a different one from the writer when you have its key) stories told twice, in the wrong section, unattributed rumors, and filler. The grade and every problem it found show on the Output tab. Costs one AI request per digest. Only Autopilot digests are graded, and the AI checks need a Gemini or Claude API key: a local model or a copy-paste chatbot doesn't grade.">
               <Toggle on={config.llm.grade !== false} onChange={v => update("llm.grade", v)} />
             </Row>
           </div>
@@ -1311,7 +1311,7 @@ function LLMTab({config, update, updateLLMPrimary, runForPrompt, promptResult, p
       {!isAuto && (
         <div style={s.card}>
           <SectionTitle hint="how copy-paste mode works">Paste-and-go</SectionTitle>
-          <p style={{ ...s.sub, marginTop:-6, marginBottom:14 }}>No API key, no model setup. NetRunner builds the prompt; you bring the chatbot.</p>
+          <p style={{ ...s.sub, marginTop:-6, marginBottom:14 }}>No API key, no model setup. NetRunner builds the prompt; you bring the chatbot. Digests made this way aren't graded: grading runs on Autopilot digests, with a Gemini or Claude API key.</p>
           {[
             ["01","NetRunner gathers your sources and writes a ready-to-paste prompt."],
             ["02","Drop it into ChatGPT, Claude, Gemini, Grok, or DeepSeek."],
